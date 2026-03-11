@@ -1,0 +1,29 @@
+Task 6 Evidence - NINA.Headless.Mediator
+Date: 2026-03-11
+
+1) Project created
+- Path: NINA.Headless.Mediator/NINA.Headless.Mediator.csproj
+- TFM: net9.0
+- RootNamespace: NINA.WPF.Base.Mediator
+
+2) Mediator copy set
+- Source: NINA.WPF.Base/Mediator/
+- Destination: NINA.Headless.Mediator/Mediator/
+- Count: 16 files
+
+3) Solution registration
+- Added to: NINA.sln
+
+4) Build verification
+Command:
+  dotnet build NINA.Headless.Mediator/NINA.Headless.Mediator.csproj
+
+Result:
+  NINA.Headless.Mediator -> C:\Users\user\Documents\Dev\nina\NINA.Headless.Mediator\bin\Debug\net9.0\NINA.Headless.Mediator.dll
+
+  Build succeeded.
+      0 Warning(s)
+      0 Error(s)
+
+Notes:
+- Direct net9 project compatibility with existing net10.0-windows upstream references remains a broader migration concern.

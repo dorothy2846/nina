@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>NINA.Headless.Mediator</AssemblyName>
+    <RootNamespace>NINA.WPF.Base.Mediator</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\NINA.Equipment\NINA.Equipment.csproj" BuildReference="false" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\NINA.Core\NINA.Core.csproj" BuildReference="false" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="MediatorMarker.cs" />
+    <None Include="Mediator\**\*.cs" />
+  </ItemGroup>
+</Project>

@@ -59,6 +59,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Sequencer.Generators",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Headless", "NINA.Headless\NINA.Headless.csproj", "{0CD0A915-51C1-44B5-9E8A-1D90A3069035}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Headless.Mediator", "NINA.Headless.Mediator\NINA.Headless.Mediator.csproj", "{DF6FFBD0-E594-45C4-873D-D0B1172988A8}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -410,6 +412,24 @@ Global
 		{0CD0A915-51C1-44B5-9E8A-1D90A3069035}.SignedRelease|x64.Build.0 = Debug|Any CPU
 		{0CD0A915-51C1-44B5-9E8A-1D90A3069035}.SignedRelease|x86.ActiveCfg = Debug|Any CPU
 		{0CD0A915-51C1-44B5-9E8A-1D90A3069035}.SignedRelease|x86.Build.0 = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Debug|x64.Build.0 = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Debug|x86.Build.0 = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Release|x64.ActiveCfg = Release|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Release|x64.Build.0 = Release|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Release|x86.ActiveCfg = Release|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.Release|x86.Build.0 = Release|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.SignedRelease|Any CPU.ActiveCfg = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.SignedRelease|Any CPU.Build.0 = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.SignedRelease|x64.ActiveCfg = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.SignedRelease|x64.Build.0 = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.SignedRelease|x86.ActiveCfg = Debug|Any CPU
+		{DF6FFBD0-E594-45C4-873D-D0B1172988A8}.SignedRelease|x86.Build.0 = Debug|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
