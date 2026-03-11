@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RuntimeIdentifier>linux-arm64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <AssemblyName>NINA.Headless</AssemblyName>
+    <RootNamespace>NINA.Headless</RootNamespace>
+    <Platforms>AnyCPU</Platforms>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="9.0.*" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="7.*" />
+  </ItemGroup>
+
+  <!-- Core NINA libraries (WPF-free) - references will be added as Wave 2 removes WPF deps -->
+  <!-- <ProjectReference Include="..\NINA.Core\NINA.Core.csproj" /> -->
+  <!-- <ProjectReference Include="..\NINA.Equipment\NINA.Equipment.csproj" /> -->
+  <!-- <ProjectReference Include="..\NINA.Sequencer\NINA.Sequencer.csproj" /> -->
+  <!-- <ProjectReference Include="..\NINA.Image\NINA.Image.csproj" /> -->
+  <!-- <ProjectReference Include="..\NINA.Astrometry\NINA.Astrometry.csproj" /> -->
+  <!-- <ProjectReference Include="..\NINA.Platesolving\NINA.Platesolving.csproj" /> -->
+  <!-- <ProjectReference Include="..\NINA.Profile\NINA.Profile.csproj" /> -->
+
+</Project>

@@ -1,0 +1,15 @@
+total 33
+drwxr-xr-x 1 user 197609    0  3월 11 23:14 .
+drwxr-xr-x 1 user 197609    0  3월 11 23:14 ..
+-rw-r--r-- 1 user 197609  117  3월 11 23:14 appsettings.Development.json
+-rw-r--r-- 1 user 197609  639  3월 11 23:14 appsettings.json
+drwxr-xr-x 1 user 197609    0  3월 11 23:14 bin
+-rw-r--r-- 1 user 197609 1323  3월 11 23:13 NINA.Headless.csproj
+drwxr-xr-x 1 user 197609    0  3월 11 23:14 obj
+-rw-r--r-- 1 user 197609  922  3월 11 23:14 Program.cs
+
+=== NINA.Headless.csproj TFM ===
+    <TargetFramework>net9.0</TargetFramework>
+
+=== NINA.sln registration ===
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NINA.Headless", "NINA.Headless\NINA.Headless.csproj", "{0CD0A915-51C1-44B5-9E8A-1D90A3069035}"
