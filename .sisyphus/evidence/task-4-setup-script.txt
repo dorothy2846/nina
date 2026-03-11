@@ -1,0 +1,46 @@
+TASK 4: Raspberry Pi 5 Environment Setup Script
+================================================
+
+DELIVERABLES COMPLETED:
+✓ scripts/setup-pi.sh created (110 lines)
+✓ docs/pi-setup.md created (486 lines)
+✓ Bash syntax validation passed: bash -n scripts/setup-pi.sh
+✓ Evidence file created
+
+SCRIPT CONTENTS (scripts/setup-pi.sh):
+- System package updates
+- Base dependencies installation
+- .NET 9 SDK installation
+- INDI libraries installation (ppa:mutlaqja/ppa)
+- PHD2 build dependencies and compilation
+- ASTAP ARM64 .deb installation
+- ASTAP G17 star database installation
+- ZWO camera udev rules configuration (vendor ID 03c3)
+- NINA user creation and directory setup
+- mDNS (avahi-daemon) configuration
+
+DOCUMENTATION CONTENTS (docs/pi-setup.md):
+- Hardware requirements (Pi 5, NVMe HAT, active cooling)
+- OS installation (Ubuntu Server 24.04 ARM64)
+- NVMe SSD configuration and mounting
+- ZWO camera USB setup and verification
+- NINA software installation instructions
+- Directory structure and permissions
+- Service management commands
+- Network configuration (mDNS, WiFi hotspot)
+- Comprehensive troubleshooting guide
+- Performance optimization tips
+- Security considerations
+
+VALIDATION:
+✓ Syntax check: bash -n scripts/setup-pi.sh PASSED
+✓ File permissions: scripts/setup-pi.sh executable
+✓ Documentation: Complete with all required sections
+✓ Hardware requirements: Documented (8GB RAM, NVMe HAT, active cooling)
+✓ Software stack: .NET 9, INDI, PHD2, ASTAP all included
+
+COMMIT MESSAGE:
+docs(setup): add Pi 5 environment setup script
+
+BRANCH: nina-pi
+DATE: 2026-03-11
