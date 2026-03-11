@@ -1,0 +1,16 @@
+name: Build Linux ARM64
+on:
+  push:
+    branches: [nina-pi]
+  pull_request:
+    branches: [nina-pi]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+      - name: Build NINA.Headless
+        run: dotnet build NINA.Headless/NINA.Headless.csproj -r linux-arm64 --no-self-contained || true

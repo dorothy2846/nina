@@ -5,6 +5,22 @@
 [![License: MPL 2.0](https://img.shields.io/badge/License-MPL%202.0-brightgreen.svg)](https://www.mozilla.org/en-US/MPL/2.0/)
 [![Become a Patron](https://img.shields.io/badge/Patreon-support-orange?logo=patreon)](https://www.patreon.com/stefanberg?fan_landing=true)
 
+## 🥧 NINA-Pi: Headless Raspberry Pi Port
+
+This fork (`nina-pi` branch) contains a headless port of N.I.N.A. for Raspberry Pi and other ARM64 Linux systems.
+
+**Key Features:**
+- Headless operation (no GUI) optimized for remote observatory control
+- REST API on port 1888 (Touch'N'Stars compatible)
+- Equipment bridge via INDI → indi_alpaca_server → Alpaca protocol
+- PHD2 auto-spawning as subprocess for guiding
+- mDNS discovery (nina-pi.local) via avahi-daemon
+- WiFi hotspot mode (SSID: NINA-Pi) for field deployment
+
+**Target Platform:** Ubuntu Server 24.04 ARM64 (.NET 9.0)
+
+---
+
 This repository contains the source code of the **N.I.N.A. - Nighttime Imaging 'N' Astronomy** imaging software.
 
 ---
