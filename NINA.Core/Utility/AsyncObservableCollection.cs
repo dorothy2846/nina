@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -18,17 +18,23 @@ using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Threading;
+#if WINDOWS
 using System.Windows;
 using System.Windows.Threading;
+#endif
 
 namespace NINA.Core.Utility {
 
     public class AsyncObservableCollection<T> : ObservableCollection<T> {
 
+        #if WINDOWS
         private readonly SynchronizationContext _synchronizationContext =
             Application.Current?.Dispatcher != null
             ? new DispatcherSynchronizationContext(Application.Current.Dispatcher)
-            : null;
+            : SynchronizationContext.Current;
+#else
+        private readonly SynchronizationContext _synchronizationContext = SynchronizationContext.Current;
+#endif
 
         public AsyncObservableCollection() {
         }

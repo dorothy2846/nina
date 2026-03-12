@@ -163,10 +163,12 @@ namespace NINA.Sequencer.SequenceItem.Imaging {
         public override async Task Execute(IProgress<ApplicationStatus> progress, CancellationToken token) {
             var count = ExposureCount;
             var dsoContainer = RetrieveTarget(this.Parent);
+#if WINDOWS
             var specificDSOContainer = dsoContainer as DeepSkyObjectContainer;
             if (specificDSOContainer != null) {                
                 count = specificDSOContainer.GetOrCreateExposureCountForItemAndCurrentFilter(this, 1)?.Count ?? ExposureCount;
             }
+#endif
 
             var capture = new CaptureSequence() {
                 ExposureTime = ExposureTime,
@@ -190,9 +192,11 @@ namespace NINA.Sequencer.SequenceItem.Imaging {
             }
             imageProcessingTask = ProcessImageData(dsoContainer, exposureData, progress, token);
 
+            #if WINDOWS
             if (specificDSOContainer != null) {
                 specificDSOContainer.IncrementExposureCountForItemAndCurrentFilter(this, 1);
             }
+            #endif
             ExposureCount++;
         }
 

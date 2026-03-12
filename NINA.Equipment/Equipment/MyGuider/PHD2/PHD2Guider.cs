@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -968,7 +968,7 @@ namespace NINA.Equipment.Equipment.MyGuider.PHD2 {
                         var settleDone = message.ToObject<PhdEventSettleDone>();
                         if (settleDone.Error != null) {
                             Logger.Error("PHD2 error:" + settleDone.Error);
-                            Notification.ShowExternalWarning(settleDone.Error, Loc.Instance["LblPhd2Warning"]);
+                            Notification.ShowWarning(settleDone.Error);
                         } else {
                             Logger.Debug("PHD2 settle completed");
                         }
@@ -1293,7 +1293,11 @@ namespace NINA.Equipment.Equipment.MyGuider.PHD2 {
 
         [RelayCommand]
         private void OpenPHD2FileDialog(object o) {
-            var dialog = CoreUtil.GetFilteredFileDialog(profileService.ActiveProfile.GuiderSettings.PHD2Path, "phd2.exe", "PHD2|phd2.exe");
+            var dialog = new Microsoft.Win32.OpenFileDialog {
+                InitialDirectory = Path.GetDirectoryName(profileService.ActiveProfile.GuiderSettings.PHD2Path),
+                FileName = Path.GetFileName(profileService.ActiveProfile.GuiderSettings.PHD2Path),
+                Filter = "PHD2|phd2.exe"
+            };
             if (dialog.ShowDialog() == true) {
                 this.profileService.ActiveProfile.GuiderSettings.PHD2Path = dialog.FileName;
             }

@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -15,10 +15,13 @@
 using System;
 using System.ComponentModel;
 using System.Reflection;
+#if WINDOWS
 using System.Windows.Markup;
+#endif
 
 namespace NINA.Core.Utility {
 
+#if WINDOWS
     public class EnumBindingSourceExtension : MarkupExtension {
         private Type _enumType;
 
@@ -59,6 +62,7 @@ namespace NINA.Core.Utility {
             return tempArray;
         }
     }
+#endif
 
     public class EnumDescriptionTypeConverter : EnumConverter {
 

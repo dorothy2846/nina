@@ -1,0 +1,12 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">HiPS Tile Server on %h</name>
+  <service>
+    <type>_hips._tcp</type>
+    <port>8080</port>
+    <txt-record>version=1.0.0</txt-record>
+    <txt-record>survey=2MASS_Color</txt-record>
+    <txt-record>maxOrder=9</txt-record>
+  </service>
+</service-group>

@@ -1,12 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFrameworks>net9.0;net10.0-windows</TargetFrameworks>
     <OutputType>Library</OutputType>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <UseWPF>true</UseWPF>
-    <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
+    <UseWPF Condition="'$(TargetFramework)' == 'net10.0-windows'">true</UseWPF>
+    <ImportWindowsDesktopTargets Condition="'$(TargetFramework)' == 'net10.0-windows'">true</ImportWindowsDesktopTargets>
     <Configurations>Debug;Release;SignedRelease</Configurations>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableWindowsTargeting Condition="'$(TargetFramework)' == 'net10.0-windows'">true</EnableWindowsTargeting>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
@@ -20,14 +20,50 @@
     <OutputPath>bin\SignedRelease\</OutputPath>
     <Optimize>true</Optimize>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(TargetFramework)' == 'net9.0'">
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
   <ItemGroup>
     <Compile Remove="Converters\**" />
     <EmbeddedResource Remove="Converters\**" />
     <None Remove="Converters\**" />
     <Page Remove="Converters\**" />
   </ItemGroup>
+  <!-- Exclude WPF-only files when building for non-Windows targets -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+    <Compile Remove="Behaviors\**" />
+    <Compile Remove="View\**" />
+    <Compile Remove="Properties\AssemblyInfo.cs" />
+    <!-- All XAML code-behind files -->
+    <Compile Remove="**\*.xaml.cs" />
+    <!-- Logic files with WPF dependencies -->
+    <Compile Remove="Logic\ExprConverter.cs" />
+  </ItemGroup>
   <ItemGroup>
     <Compile Remove="Logic\ValConverter.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+    <Compile Remove="Behaviors\**" />
+    <Compile Remove="Container\Datatemplates.xaml.cs" />
+    <Compile Remove="Container\DeepSkyObjectContainer.cs" />
+    <Compile Remove="Logic\*.xaml.cs" />
+    <Compile Remove="Logic\ExprConverter.cs" />
+    <Compile Remove="Logic\Expression.cs" />
+    <Compile Remove="Logic\SymbolBroker.cs" />
+    <Compile Remove="SequenceItem\*\Datatemplates.xaml.cs" />
+    <Compile Remove="SequenceItem\*\DataTemplates.xaml.cs" />
+    <Compile Remove="SequenceItem\Dome\OpenDomeShutter.cs" />
+    <Compile Remove="SequenceItem\FlatDevice\SkyFlat.cs" />
+    <Compile Remove="SequenceItem\Imaging\TakeSubframeExposure.cs" />
+    <Compile Remove="SequenceItem\Utility\MessageBox.cs" />
+    <Compile Remove="SequenceItem\Utility\WaitForSunAltitude.cs" />
+    <Compile Remove="Trigger\Autofocus\AutofocusAfterExposures.cs" />
+    <Compile Remove="Trigger\Autofocus\AutofocusAfterFilterChange.cs" />
+    <Compile Remove="Trigger\Autofocus\AutofocusAfterHFRIncreaseTrigger.cs" />
+    <Compile Remove="Trigger\Autofocus\AutofocusAfterTimeTrigger.cs" />
+    <Compile Remove="Trigger\Guider\RestoreGuiding.cs" />
+    <Compile Remove="Trigger\Platesolving\CenterAfterDriftTrigger.cs" />
+    <Compile Remove="Properties\AssemblyInfo.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\CommonAssemblyInfo.cs">
@@ -51,9 +87,9 @@
     <ProjectReference Include="..\NINA.Image\NINA.Image.csproj" />
     <ProjectReference Include="..\NINA.Platesolving\NINA.PlateSolving.csproj" />
     <ProjectReference Include="..\NINA.Profile\NINA.Profile.csproj" />
-    <ProjectReference Include="..\NINA.CustomControlLibrary\NINA.CustomControlLibrary.csproj" />
+    <ProjectReference Include="..\NINA.CustomControlLibrary\NINA.CustomControlLibrary.csproj" Condition="'$(TargetFramework)' == 'net10.0-windows'" />
     <ProjectReference Include="..\NINA.Sequencer.Generators\NINA.Sequencer.Generators.csproj" OutputItemType="Analyzer" />
-    <ProjectReference Include="..\NINA.WPF.Base\NINA.WPF.Base.csproj" />
+    <ProjectReference Include="..\NINA.WPF.Base\NINA.WPF.Base.csproj" Condition="'$(TargetFramework)' == 'net10.0-windows'" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="NCalcSync" Version="5.2.11" />

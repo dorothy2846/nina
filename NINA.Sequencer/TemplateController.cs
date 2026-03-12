@@ -97,13 +97,17 @@ namespace NINA.Sequencer {
             }
 
             templatesView = new CollectionViewSource { Source = Templates };
+#if WINDOWS
             TemplatesView.GroupDescriptions.Add(new PropertyGroupDescription("GroupTranslated"));
             TemplatesView.SortDescriptions.Add(new SortDescription("GroupTranslated", ListSortDirection.Ascending));
             TemplatesView.SortDescriptions.Add(new SortDescription("Container.Name", ListSortDirection.Ascending));
+#endif
             TemplatesView.Filter += new Predicate<object>(ApplyViewFilter);
 
             templatesMenuView = new CollectionViewSource { Source = Templates };
+#if WINDOWS
             TemplatesMenuView.SortDescriptions.Add(new SortDescription("Container.Name", ListSortDirection.Ascending));
+#endif
 
             LoadUserTemplates().ContinueWith(t => {
                 sequenceTemplateFolderWatcher = new FileSystemWatcher(profileService.ActiveProfile.SequenceSettings.SequencerTemplatesFolder, "*" + TemplateFileExtension);

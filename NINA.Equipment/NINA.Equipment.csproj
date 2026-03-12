@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFrameworks>net9.0;net10.0-windows</TargetFrameworks>
     <OutputType>Library</OutputType>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <UseWPF>true</UseWPF>
-    <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
+    <UseWPF Condition="'$(TargetFramework)' == 'net10.0-windows'">true</UseWPF>
+    <ImportWindowsDesktopTargets Condition="'$(TargetFramework)' == 'net10.0-windows'">true</ImportWindowsDesktopTargets>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Configurations>Debug;Release;SignedRelease</Configurations>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableWindowsTargeting Condition="'$(TargetFramework)' == 'net10.0-windows'">true</EnableWindowsTargeting>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
@@ -28,17 +28,63 @@
     <None Remove="publish\**" />
     <Page Remove="publish\**" />
   </ItemGroup>
+  <!-- Exclude Windows-only files when building for non-Windows targets -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+    <!-- ASCOM COM driver files (depend on ASCOM.Com.Components) -->
+    <Compile Remove="Equipment\AscomDevice.cs" />
+    <Compile Remove="Equipment\AscomLogger.cs" />
+    <Compile Remove="Equipment\MyCamera\AscomCamera.cs" />
+    <Compile Remove="Equipment\MyDome\AscomDome.cs" />
+    <Compile Remove="Equipment\MyFilterWheel\AscomFilterWheel.cs" />
+    <Compile Remove="Equipment\MyFlatDevice\AscomCoverCalibrator.cs" />
+    <Compile Remove="Equipment\MyFocuser\AscomFocuser.cs" />
+    <Compile Remove="Equipment\MyRotator\AscomRotator.cs" />
+    <Compile Remove="Equipment\MySafetyMonitor\AscomSafetyMonitor.cs" />
+    <Compile Remove="Equipment\MySwitch\Ascom\**" />
+    <Compile Remove="Equipment\MyTelescope\AscomTelescope.cs" />
+    <Compile Remove="Equipment\MyWeatherData\AscomObservingConditions.cs" />
+    <!-- Nikon SDK files (depend on nikoncswrapper) -->
+    <Compile Remove="Equipment\MyCamera\NikonCamera.cs" />
+    <!-- MGEN files (depend on NINA.MGEN) -->
+    <Compile Remove="Equipment\MyGuider\MGENGuider.cs" />
+    <!-- Moravian camera (depends on System.Windows.Interop) -->
+    <Compile Remove="Equipment\MyCamera\MoravianCamera.cs" />
+    <Compile Remove="SDK\CameraSDKs\MoravianSDK\MoravianCameraProvider.cs" />
+    <Compile Remove="SDK\CameraSDKs\MoravianSDK\MoravianFilterWheelProvider.cs" />
+    <Compile Remove="SDK\CameraSDKs\MoravianSDK\MoravianCameraProvider.cs" />
+    <Compile Remove="SDK\CameraSDKs\MoravianSDK\MoravianFilterWheelProvider.cs" />
+    <!-- WPF Converters -->
+    <Compile Remove="Converter\**" />
+    <!-- AlpacaDirect files (inherit from Ascom* classes) -->
+    <Compile Remove="Equipment\MyCamera\AlpacaDirectCamera.cs" />
+    <Compile Remove="Equipment\MyDome\AlpacaDirectDome.cs" />
+    <Compile Remove="Equipment\MyFilterWheel\AlpacaDirectFilterWheel.cs" />
+    <Compile Remove="Equipment\MyFlatDevice\AlpacaDirectCoverCalibrator.cs" />
+    <Compile Remove="Equipment\MyFocuser\AlpacaDirectFocuser.cs" />
+    <Compile Remove="Equipment\MyRotator\AlpacaDirectRotator.cs" />
+    <Compile Remove="Equipment\MySafetyMonitor\AlpacaDirectSafetyMonitor.cs" />
+    <Compile Remove="Equipment\MySwitch\AlpacaDirectSwitch.cs" />
+    <Compile Remove="Equipment\MyTelescope\AlpacaDirectTelescope.cs" />
+    <Compile Remove="Equipment\MyWeatherData\AlpacaDirectObservingConditions.cs" />
+    <!-- Moravian integrated filter wheel (depends on MoravianCamera) -->
+    <Compile Remove="Equipment\MyFilterWheel\MoravianIntegratedFilterWheel.cs" />
+    <!-- AlpacaDirect settings (depends on ASCOM types) -->
+    <Compile Remove="Equipment\AlpacaDirectSettings.cs" />
+    <!-- ASCOM/Alpaca utility files -->
+    <Compile Remove="Utility\ASCOMInteraction.cs" />
+    <Compile Remove="Utility\AlpacaInteraction.cs" />
+  </ItemGroup>
   <ItemGroup>
     <Compile Include="..\CommonAssemblyInfo.cs">
       <Link>Properties\CommonAssemblyInfo.cs</Link>
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\nikoncswrapper\nikoncswrapper.csproj" />
+    <ProjectReference Include="..\nikoncswrapper\nikoncswrapper.csproj" Condition="'$(TargetFramework)' == 'net10.0-windows'" />
     <ProjectReference Include="..\NINA.Astrometry\NINA.Astrometry.csproj" />
     <ProjectReference Include="..\NINA.Core\NINA.Core.csproj" />
     <ProjectReference Include="..\NINA.Image\NINA.Image.csproj" />
-    <ProjectReference Include="..\NINA.MGEN\NINA.MGEN.csproj" />
+    <ProjectReference Include="..\NINA.MGEN\NINA.MGEN.csproj" Condition="'$(TargetFramework)' == 'net10.0-windows'" />
     <ProjectReference Include="..\NINA.Profile\NINA.Profile.csproj" />
   </ItemGroup>
   <ItemGroup>

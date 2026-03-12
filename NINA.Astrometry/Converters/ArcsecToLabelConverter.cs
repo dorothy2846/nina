@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -27,7 +27,7 @@ namespace NINA.Astrometry.Converters {
             }
             var arcsecs = (double)value;
             if (arcsecs > 3600) {
-                return AstroUtil.ArcsecToDegree(arcsecs).ToString("0.00", CultureInfo.InvariantCulture) + "°";
+                return AstroUtil.ArcsecToDegree(arcsecs).ToString("0.00", CultureInfo.InvariantCulture) + "\u00B0";
             } else if (arcsecs > 60) {
                 return AstroUtil.ArcsecToArcmin(arcsecs).ToString("0.00", CultureInfo.InvariantCulture) + "'";
             } else {

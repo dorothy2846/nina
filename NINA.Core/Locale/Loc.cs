@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -16,7 +16,9 @@ using NINA.Core.Utility;
 using System;
 using System.Globalization;
 using System.Resources;
+#if WINDOWS
 using System.Windows.Data;
+#endif
 
 namespace NINA.Core.Locale {
 
@@ -54,6 +56,7 @@ namespace NINA.Core.Locale {
         }
     }
 
+#if WINDOWS
     public class LocExtension : Binding {
 
         public LocExtension(string name) : base($"[{name}]") {
@@ -61,4 +64,5 @@ namespace NINA.Core.Locale {
             this.Source = Loc.Instance;
         }
     }
+#endif
 }

@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -49,12 +49,14 @@ namespace NINA.Equipment.Equipment.MyCamera {
         }
 
         private void OpenFolderDiag(object obj) {
+#if WINDOWS
             var dialog = new OpenFolderDialog();
             dialog.InitialDirectory = FolderPath;
 
             if (dialog.ShowDialog() == true) {
                 FolderPath = dialog.FolderName;
             }
+#endif
         }
 
         public ICommand OpenFolderDiagCommand { get; }

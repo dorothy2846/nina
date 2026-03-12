@@ -72,7 +72,12 @@ namespace NINA.Sequencer.Conditions {
         [JsonProperty]
         public ISequenceContainer Parent { get; set; }
 
-        public ICommand ResetProgressCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => { ResetProgress(); ShowMenu = false; });
+        public ICommand ResetProgressCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => { ResetProgress(); ShowMenu = false; });
+#else
+            null;
+#endif
 
         private bool showMenu;
 
@@ -96,7 +101,12 @@ namespace NINA.Sequencer.Conditions {
             }
         }
 
-        public ICommand ShowMenuCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => ShowMenu = !ShowMenu, (o) => Status != SequenceEntityStatus.DISABLED);
+        public ICommand ShowMenuCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => ShowMenu = !ShowMenu, (o) => Status != SequenceEntityStatus.DISABLED);
+#else
+            null;
+#endif
 
         public virtual void AfterParentChanged() {
         }
@@ -168,12 +178,19 @@ namespace NINA.Sequencer.Conditions {
         public virtual void Teardown() {
         }
 
-        public ICommand DetachCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => Detach());
+        public ICommand DetachCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => Detach());
+#else
+            null;
+#endif
 
         public ICommand MoveUpCommand => null;
 
         public ICommand MoveDownCommand => null;
-        public ICommand DisableEnableCommand => new GalaSoft.MvvmLight.Command.RelayCommand(() => {
+        public ICommand DisableEnableCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand(() => {
             if (Status != SequenceEntityStatus.DISABLED) {
                 Status = SequenceEntityStatus.DISABLED;
                 ShowMenu = false;
@@ -182,6 +199,9 @@ namespace NINA.Sequencer.Conditions {
             }
 
         });
+#else
+            null;
+#endif
 
         public void Detach() {
             Parent?.Remove(this);

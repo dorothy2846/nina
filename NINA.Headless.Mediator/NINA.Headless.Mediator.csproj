@@ -8,11 +8,14 @@
     <RootNamespace>NINA.WPF.Base.Mediator</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\NINA.Equipment\NINA.Equipment.csproj" BuildReference="false" ReferenceOutputAssembly="false" />
-    <ProjectReference Include="..\NINA.Core\NINA.Core.csproj" BuildReference="false" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="..\NINA.Equipment\NINA.Equipment.csproj" />
+    <ProjectReference Include="..\NINA.Core\NINA.Core.csproj" />
+    <ProjectReference Include="..\NINA.Image\NINA.Image.csproj" />
+    <ProjectReference Include="..\NINA.Profile\NINA.Profile.csproj" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="MediatorMarker.cs" />
-    <None Include="Mediator\**\*.cs" />
+    <Compile Include="Mediator\*.cs" />
+    <Compile Include="Interfaces\*.cs" />
   </ItemGroup>
 </Project>

@@ -511,7 +511,11 @@ namespace NINA.Equipment.Equipment.MyGuider.SkyGuard
         //TODO : Verify if [o] parameter could be removed.
         private void OpenSkyGuardFileDiag(object o)
         {
-            var dialog = CoreUtil.GetFilteredFileDialog(profileService.ActiveProfile.GuiderSettings.SkyGuardPath, "SkyGuard.exe", "SkyGuard files :|SkyGuard.exe;SkyGuide.exe;SkySurveyor.exe| All files(*.*) | *.*");
+            var dialog = new Microsoft.Win32.OpenFileDialog {
+                InitialDirectory = Path.GetDirectoryName(profileService.ActiveProfile.GuiderSettings.SkyGuardPath),
+                FileName = Path.GetFileName(profileService.ActiveProfile.GuiderSettings.SkyGuardPath),
+                Filter = "SkyGuard files :|SkyGuard.exe;SkyGuide.exe;SkySurveyor.exe| All files(*.*) | *.*"
+            };
             if (dialog.ShowDialog() == true)
             {
                 this.profileService.ActiveProfile.GuiderSettings.SkyGuardPath = dialog.FileName;

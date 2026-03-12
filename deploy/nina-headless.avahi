@@ -1,0 +1,12 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">Beyond Stellar on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>1888</port>
+    <txt-record>path=/api/v1</txt-record>
+    <txt-record>version=1.0.0</txt-record>
+    <txt-record>app=beyond-stellar</txt-record>
+  </service>
+</service-group>

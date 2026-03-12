@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -1069,6 +1069,7 @@ namespace NINA.Equipment.Equipment.MyCamera {
             }
         }
 
+        #if WINDOWS
         public Task<IExposureData> DownloadLiveView(CancellationToken token) {
             return Task.Run<IExposureData>(async () => {
                 IntPtr stream = IntPtr.Zero;
@@ -1100,7 +1101,7 @@ namespace NINA.Equipment.Equipment.MyCamera {
                     Marshal.Copy(pointer, bytes, 0, bytes.Length);
 
                     using (var memoryStream = new System.IO.MemoryStream(bytes)) {
-                        JpegBitmapDecoder decoder = new JpegBitmapDecoder(memoryStream, BitmapCreateOptions.IgnoreColorProfile, BitmapCacheOption.OnLoad);
+                        BitmapDecoder decoder = BitmapDecoder.Create(memoryStream, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
 
                         FormatConvertedBitmap bitmap = new FormatConvertedBitmap();
                         bitmap.BeginInit();
@@ -1138,6 +1139,11 @@ namespace NINA.Equipment.Equipment.MyCamera {
                 }
             });
         }
+        #else
+        public Task<IExposureData> DownloadLiveView(CancellationToken token) {
+            return Task.FromException<IExposureData>(new NotSupportedException("Canon live view requires Windows."));
+        }
+        #endif
 
         public string Action(string actionName, string actionParameters) {
             throw new NotImplementedException();

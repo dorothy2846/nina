@@ -1,0 +1,13 @@
+[Unit]
+Description=WiFi AP Watchdog for Beyond Stellar
+After=hostapd.service
+Requires=hostapd.service
+
+[Service]
+Type=simple
+ExecStart=/opt/nina-headless/wifi-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

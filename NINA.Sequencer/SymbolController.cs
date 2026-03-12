@@ -24,9 +24,11 @@ namespace NINA.Sequencer {
 
             dataSymbols = new ObservableCollection<Symbol>(SymbolBroker.GetSymbols());
             symbolsView = new CollectionViewSource { Source = DataSymbols };
+#if WINDOWS
             symbolsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(Symbol.Category)));
             symbolsView.SortDescriptions.Add(new SortDescription(nameof(Symbol.Category), ListSortDirection.Ascending));
             symbolsView.SortDescriptions.Add(new SortDescription(nameof(Symbol.Key), ListSortDirection.Ascending));
+#endif
 
             SymbolsView.Filter += new Predicate<object>(ApplyViewFilter);
 
@@ -84,6 +86,7 @@ namespace NINA.Sequencer {
 
             // Switch to UI thread to update bindings & view
             var dispatcher = Application.Current?.Dispatcher;
+#if WINDOWS
             if (dispatcher is null || dispatcher.CheckAccess()) {
                 ApplySymbols(latest);
             } else {
@@ -92,6 +95,9 @@ namespace NINA.Sequencer {
                     System.Windows.Threading.DispatcherPriority.DataBind,
                     token);
             }
+#else
+            ApplySymbols(latest);
+#endif
         }
 
         private void ApplySymbols(IReadOnlyList<Symbol> latest) {

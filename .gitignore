@@ -115,3 +115,9 @@ publish/
 linux-arm64/
 *.so
 *.deb
+
+# Beyond Stellar working files
+.sisyphus/
+astrometry_errors.txt
+tmp_errors.txt
+nul

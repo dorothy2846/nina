@@ -137,8 +137,13 @@ namespace NINA.Sequencer.Trigger.Autofocus {
                 DeltaT = Math.Round(Math.Abs(initialTemperature - info.Temperature), 2);
                 shouldTrigger = Math.Abs(initialTemperature - info.Temperature) >= Amount;
             } else {
+#if WINDOWS
                 DeltaT = Math.Round(Math.Abs(lastAF.AutoFocusPoint.Temperature - info.Temperature), 2);
                 shouldTrigger = Math.Abs(lastAF.AutoFocusPoint.Temperature - info.Temperature) >= Amount;
+#else
+                DeltaT = Math.Round(Math.Abs(initialTemperature - info.Temperature), 2);
+                shouldTrigger = Math.Abs(initialTemperature - info.Temperature) >= Amount;
+#endif
             }
 
             if (shouldTrigger) {

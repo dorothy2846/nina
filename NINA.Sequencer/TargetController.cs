@@ -91,13 +91,17 @@ namespace NINA.Sequencer {
             Targets = new List<TargetSequenceContainer>();
             
             targetsView = new CollectionViewSource { Source = Targets };
+#if WINDOWS
             targetsView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(TargetSequenceContainer.Grouping)));
             TargetsView.SortDescriptions.Add(new SortDescription(nameof(TargetSequenceContainer.Weight), ListSortDirection.Ascending));
+#endif
             TargetsView.Filter += new Predicate<object>(ApplyViewFilter);
             SortByRelevance = true;
 
             targetsMenuView = new CollectionViewSource { Source = Targets };
+#if WINDOWS
             TargetsMenuView.SortDescriptions.Add(new SortDescription(nameof(TargetSequenceContainer.Name), ListSortDirection.Ascending));
+#endif
 
             LoadTargets().ContinueWith(t => {
                 sequenceTargetsFolderWatcher = new FileSystemWatcher(profileService.ActiveProfile.SequenceSettings.SequencerTargetsFolder, "*" + TargetsFileExtension);
@@ -115,6 +119,7 @@ namespace NINA.Sequencer {
 
         [RelayCommand]
         private void ToggleSort() {
+#if WINDOWS
             if (SortByRelevance) {
                 TargetsView.SortDescriptions.RemoveAt(0);
                 TargetsView.SortDescriptions.Add(new SortDescription(nameof(TargetSequenceContainer.Weight), ListSortDirection.Ascending));
@@ -122,6 +127,7 @@ namespace NINA.Sequencer {
                 TargetsView.SortDescriptions.RemoveAt(0);
                 TargetsView.SortDescriptions.Add(new SortDescription(nameof(TargetSequenceContainer.Name), ListSortDirection.Ascending));
             }
+#endif
         }
 
 

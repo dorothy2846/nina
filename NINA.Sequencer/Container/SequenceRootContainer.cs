@@ -53,15 +53,22 @@ namespace NINA.Sequencer.Container {
         public SequenceRootContainer() : base(new SequentialStrategy()) {
         }
 
-        public override ICommand ResetProgressCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>(
+        public override ICommand ResetProgressCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>(
             (o) => {
                 if (MyMessageBox.Show(Loc.Instance["Lbl_SequenceContainer_SequenceRootContainer_ResetPrompt"], Loc.Instance["Lbl_SequenceContainer_SequenceRootContainer_ResetPromptCaption"], System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes) {
                     base.ResetProgressCommand.Execute(o);
                 }
             }
         );
+#else
+            null;
+#endif
 
-        public override ICommand DetachCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>(
+        public override ICommand DetachCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>(
             (o) => {
                 if (MyMessageBox.Show(Loc.Instance["Lbl_SequenceContainer_SequenceRootContainer_ClearPrompt"], Loc.Instance["Lbl_SequenceContainer_SequenceRootContainer_ClearCaption"], System.Windows.MessageBoxButton.YesNo, System.Windows.MessageBoxResult.No) == System.Windows.MessageBoxResult.Yes) {
                     foreach (var trigger in GetTriggersSnapshot()) {
@@ -76,6 +83,9 @@ namespace NINA.Sequencer.Container {
                 }
             }
         );
+#else
+            null;
+#endif
 
         private void ClearContainer(ISequenceContainer container) {
             foreach (var item in container.GetItemsSnapshot()) {
@@ -122,9 +132,14 @@ namespace NINA.Sequencer.Container {
             }
         }
 
-        public override ICommand DropIntoCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => {
+        public override ICommand DropIntoCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => {
             (Items[1] as TargetAreaContainer).DropIntoCommand.Execute(o);
         });
+#else
+            null;
+#endif
 
         public override object Clone() {
             return new SequenceRootContainer() {

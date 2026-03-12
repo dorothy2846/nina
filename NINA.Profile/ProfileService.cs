@@ -209,8 +209,12 @@ namespace NINA.Profile {
             CultureInfo.DefaultThreadCurrentUICulture = language;
             Loc.Instance.ReloadLocale(ActiveProfile.ApplicationSettings.Culture);
             var eventHandler = LocaleChanged;
-            if (eventHandler != null) { 
+            if (eventHandler != null) {
+#if WINDOWS
                 Application.Current.Dispatcher?.Invoke(eventHandler, this, null);
+#else
+                eventHandler.Invoke(this, EventArgs.Empty);
+#endif
             }
         }
 
@@ -218,7 +222,11 @@ namespace NINA.Profile {
             ActiveProfile.AstrometrySettings.Latitude = latitude;
             var eventHandler = LocationChanged;
             if (eventHandler != null) {
+#if WINDOWS
                 Application.Current.Dispatcher?.Invoke(eventHandler, this, null);
+#else
+                eventHandler.Invoke(this, EventArgs.Empty);
+#endif
             }
         }
 
@@ -226,7 +234,11 @@ namespace NINA.Profile {
             ActiveProfile.AstrometrySettings.Longitude = longitude;
             var eventHandler = LocationChanged;
             if (eventHandler != null) {
+#if WINDOWS
                 Application.Current.Dispatcher?.Invoke(LocationChanged, this, null);
+#else
+                LocationChanged?.Invoke(this, EventArgs.Empty);
+#endif
             }
         }
 
@@ -234,7 +246,11 @@ namespace NINA.Profile {
             ActiveProfile.AstrometrySettings.Elevation = elevation;
             var eventHandler = LocationChanged;
             if (eventHandler != null) {
+#if WINDOWS
                 Application.Current.Dispatcher?.Invoke(eventHandler, this, null);
+#else
+                eventHandler.Invoke(this, EventArgs.Empty);
+#endif
             }
         }
 
@@ -257,7 +273,11 @@ namespace NINA.Profile {
 
             var eventHandler = HorizonChanged;
             if (eventHandler != null) {
+#if WINDOWS
                 Application.Current.Dispatcher?.Invoke(eventHandler, this, null);
+#else
+                eventHandler.Invoke(this, EventArgs.Empty);
+#endif
             }
         }
 
@@ -317,7 +337,9 @@ namespace NINA.Profile {
             get => activeProfile;
             private set {
                 activeProfile = value;
+#if WINDOWS
                 Application.Current.Resources["ActiveProfile"] = activeProfile;
+#endif
                 RaisePropertyChanged();
             }
         }
@@ -328,8 +350,11 @@ namespace NINA.Profile {
                     try {
                         var eventHandlerBeforeProfileChanging = BeforeProfileChanging;
                         if (eventHandlerBeforeProfileChanging != null) {
+#if WINDOWS
                             Application.Current.Dispatcher?.Invoke(eventHandlerBeforeProfileChanging, this, new EventArgs());
-
+#else
+                            eventHandlerBeforeProfileChanging.Invoke(this, new EventArgs());
+#endif
                         }
                         var old = activeProfile;
                         var p = Profile.Load(info.Location);
@@ -348,20 +373,35 @@ namespace NINA.Profile {
 
                         var eventHandlerProfile = ProfileChanged;
                         if (eventHandlerProfile != null) {
+#if WINDOWS
                             Application.Current.Dispatcher?.Invoke(eventHandlerProfile, this, new ProfileChangedEventArgs(old, ActiveProfile));
-
+#else
+                            eventHandlerProfile.Invoke(this, new ProfileChangedEventArgs(old, ActiveProfile));
+#endif
                         }
                         var eventHandlerLocale = LocaleChanged;
                         if (eventHandlerLocale != null) {
+#if WINDOWS
                             Application.Current.Dispatcher?.Invoke(eventHandlerLocale, this, null);
+#else
+                            eventHandlerLocale.Invoke(this, EventArgs.Empty);
+#endif
                         }
                         var eventHandlerLocation = LocationChanged;
                         if (eventHandlerLocation != null) {
+#if WINDOWS
                             Application.Current.Dispatcher?.Invoke(eventHandlerLocation, this, null);
+#else
+                            eventHandlerLocation.Invoke(this, EventArgs.Empty);
+#endif
                         }
                         var eventHorizonChanged = HorizonChanged;
                         if (eventHorizonChanged != null) {
+#if WINDOWS
                             Application.Current.Dispatcher?.Invoke(eventHorizonChanged, this, null);
+#else
+                            eventHorizonChanged.Invoke(this, EventArgs.Empty);
+#endif
                         }
                         RegisterChangedEventHandlers();
                     } catch (Exception ex) {
@@ -463,6 +503,7 @@ namespace NINA.Profile {
             }
         }
 
+#if WINDOWS
         public static System.Threading.Tasks.Task ActivateInstanceWatcher(
             IProfileService profileService,
             Window mainWindow
@@ -502,6 +543,7 @@ namespace NINA.Profile {
                     }
                 }, System.Threading.Tasks.TaskCreationOptions.LongRunning);
         }
+#endif
     }
 
     public class ProfileChangedEventArgs : EventArgs {

@@ -23,6 +23,8 @@ using NINA.Profile.Interfaces;
 using NINA.Core.Utility;
 using NINA.Core.Utility.Notification;
 using NINA.Core.Utility.Extensions;
+using NINA.WPF.Base.Interfaces.Mediator;
+using NINA.WPF.Base.Interfaces.ViewModel;
 
 namespace NINA.WPF.Base.Mediator {
 

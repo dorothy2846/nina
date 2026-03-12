@@ -56,14 +56,36 @@ namespace NINA.Sequencer.SequenceItem {
         private string name;
         private bool showMenu;
         private SequenceEntityStatus status = SequenceEntityStatus.CREATED;
-        public ICommand AddCloneToParentCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => { AddCloneToParent(); ShowMenu = false; });
+        public ICommand AddCloneToParentCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => { AddCloneToParent(); ShowMenu = false; });
+#else
+            null;
+#endif
         public string Category { get; set; }
         public string Description { get; set; }
-        public virtual ICommand DetachCommand => new GalaSoft.MvvmLight.Command.RelayCommand(Detach);
+        public virtual ICommand DetachCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand(Detach);
+#else
+            null;
+#endif
         public GeometryGroup Icon { get; set; }
-        public ICommand MoveDownCommand => new GalaSoft.MvvmLight.Command.RelayCommand(MoveDown);
-        public ICommand MoveUpCommand => new GalaSoft.MvvmLight.Command.RelayCommand(MoveUp);
-        public ICommand DisableEnableCommand => new GalaSoft.MvvmLight.Command.RelayCommand(() => {
+        public ICommand MoveDownCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand(MoveDown);
+#else
+            null;
+#endif
+        public ICommand MoveUpCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand(MoveUp);
+#else
+            null;
+#endif
+        public ICommand DisableEnableCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand(() => {
             if(Status != SequenceEntityStatus.DISABLED) {
                 Status = SequenceEntityStatus.DISABLED;
                 ShowMenu = false;
@@ -72,6 +94,9 @@ namespace NINA.Sequencer.SequenceItem {
             }
             
         });
+#else
+            null;
+#endif
 
         public ISymbolBroker SymbolBroker {
             get => symbolBroker;
@@ -116,7 +141,12 @@ namespace NINA.Sequencer.SequenceItem {
             }
         }
 
-        public virtual ICommand ResetProgressCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => { ResetProgressCascaded(); ShowMenu = false; });
+        public virtual ICommand ResetProgressCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => { ResetProgressCascaded(); ShowMenu = false; });
+#else
+            null;
+#endif
 
         public bool ShowMenu {
             get => showMenu;
@@ -126,7 +156,12 @@ namespace NINA.Sequencer.SequenceItem {
             }
         }
 
-        public ICommand ShowMenuCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => ShowMenu = !ShowMenu, (o) => Status != SequenceEntityStatus.DISABLED);
+        public ICommand ShowMenuCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>((o) => ShowMenu = !ShowMenu, (o) => Status != SequenceEntityStatus.DISABLED);
+#else
+            null;
+#endif
 
         public SequenceEntityStatus Status {
             get => status;

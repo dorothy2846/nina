@@ -43,7 +43,9 @@ namespace NINA.Sequencer.SequenceItem.Utility {
 
         [ImportingConstructor]
         public ExternalScript(ISymbolBroker symbolBroker) {
-            OpenDialogCommand = new GalaSoft.MvvmLight.Command.RelayCommand<object>((object o) => {
+            OpenDialogCommand =
+#if WINDOWS
+                new GalaSoft.MvvmLight.Command.RelayCommand<object>((object o) => {
                 Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog();
                 dialog.Title = Loc.Instance["Lbl_SequenceItem_Utility_ExternalScript_Name"];
                 dialog.FileName = "";
@@ -54,6 +56,9 @@ namespace NINA.Sequencer.SequenceItem.Utility {
                     Script = "\"" + dialog.FileName + "\"";
                 }
             });
+#else
+                null;
+#endif
             _symbolBroker = symbolBroker;
             _ninaProvider = (_symbolBroker as ISymbolBrokerProviderApi)?.GetInternalProvider("NINA");
         }

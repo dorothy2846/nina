@@ -54,7 +54,9 @@ namespace NINA.PlateSolving {
         /// <returns></returns>
         private static IPlateSolver GetPlateSolver(IPlateSolveSettings plateSolveSettings, PlateSolverEnum solver) {
             return solver switch {
+                #if WINDOWS
                 PlateSolverEnum.ASTROMETRY_NET => new AstrometryPlateSolver(plateSolveSettings.AstrometryURL, plateSolveSettings.AstrometryAPIKey),
+#endif
                 PlateSolverEnum.LOCAL => new LocalPlateSolver(plateSolveSettings.CygwinLocation),
                 PlateSolverEnum.PLATESOLVE2 => new Platesolve2Solver(plateSolveSettings.PS2Location),
                 PlateSolverEnum.PLATESOLVE3 => new Platesolve3Solver(plateSolveSettings.PS3Location),

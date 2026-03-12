@@ -64,6 +64,7 @@ namespace NINA.Sequencer.SequenceItem.Utility {
 
         [RelayCommand]
         private void OpenDialog() {
+#if WINDOWS
             Microsoft.Win32.SaveFileDialog dialog = new Microsoft.Win32.SaveFileDialog();
             dialog.Title = Loc.Instance["Lbl_SequenceItem_Utility_SaveSequence_Name"];
             dialog.FileName = "";
@@ -73,6 +74,7 @@ namespace NINA.Sequencer.SequenceItem.Utility {
             if (dialog.ShowDialog() == true) {
                 FilePath = dialog.FileName;
             }
+#endif
         }
 
         public override string ToString() {

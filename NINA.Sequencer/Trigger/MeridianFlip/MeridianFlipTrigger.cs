@@ -154,7 +154,11 @@ namespace NINA.Sequencer.Trigger.MeridianFlip {
 
             lastFlipTime = DateTime.Now;
             lastFlipCoordiantes = target;
+#if WINDOWS
             return meridianFlipVMFactory.Create().MeridianFlip(target, timeToFlip, token);
+#else
+            return Task.CompletedTask;
+#endif
         }
 
         public override void AfterParentChanged() {

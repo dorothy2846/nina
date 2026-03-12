@@ -79,25 +79,33 @@ namespace NINA.Sequencer {
             }
 
             ItemsView = CollectionViewSource.GetDefaultView(allEntities);
+#if WINDOWS
             ItemsView.GroupDescriptions.Add(new PropertyGroupDescription("Entity.Category"));
             ItemsView.SortDescriptions.Add(new SortDescription("Entity.Category", ListSortDirection.Ascending));
             ItemsView.SortDescriptions.Add(new SortDescription("Entity.Name", ListSortDirection.Ascending));
+#endif
             ItemsView.Filter += new Predicate<object>(ApplyViewFilter);
 
             InstructionsView = CollectionViewSource.GetDefaultView(sidebarItems);
+#if WINDOWS
             InstructionsView.GroupDescriptions.Add(new PropertyGroupDescription("Entity.Category"));
             InstructionsView.SortDescriptions.Add(new SortDescription("Entity.Category", ListSortDirection.Ascending));
             InstructionsView.SortDescriptions.Add(new SortDescription("Entity.Name", ListSortDirection.Ascending));
+#endif
             InstructionsView.Filter += new Predicate<object>((object o) => (o as SidebarEntity).Enabled);
 
             ConditionsView = CollectionViewSource.GetDefaultView(sidebarConditions);
+#if WINDOWS
             ConditionsView.SortDescriptions.Add(new SortDescription("Entity.Category", ListSortDirection.Ascending));
             ConditionsView.SortDescriptions.Add(new SortDescription("Entity.Name", ListSortDirection.Ascending));
+#endif
             ConditionsView.Filter += new Predicate<object>((object o) => (o as SidebarEntity).Enabled);
 
             TriggersView = CollectionViewSource.GetDefaultView(sidebarTriggers);
+#if WINDOWS
             TriggersView.SortDescriptions.Add(new SortDescription("Entity.Category", ListSortDirection.Ascending));
             TriggersView.SortDescriptions.Add(new SortDescription("Entity.Name", ListSortDirection.Ascending));
+#endif
             TriggersView.Filter += new Predicate<object>((object o) => (o as SidebarEntity).Enabled);
 
             SettingsMode = false;

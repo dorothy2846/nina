@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -26,7 +26,7 @@ using System.Threading.Tasks;
 
 namespace NINA.Core.Utility {
 
-    public static class CoreUtil {
+    public static partial class CoreUtil {
         public static char[] PATHSEPARATORS = new char[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar };
         public static string APPLICATIONDIRECTORY = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
         public static string APPLICATIONTEMPPATH = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NINA");
@@ -296,6 +296,7 @@ namespace NINA.Core.Utility {
             return result * Math.Sign(value);
         }
 
+#if WINDOWS
         public static Microsoft.Win32.OpenFileDialog GetFilteredFileDialog(string path, string filename, string filter) {
             Microsoft.Win32.OpenFileDialog dialog = new Microsoft.Win32.OpenFileDialog();
 
@@ -306,6 +307,7 @@ namespace NINA.Core.Utility {
             dialog.Filter = filter;
             return dialog;
         }
+#endif
 
         public static void SaveSettings(ApplicationSettingsBase settings, [CallerMemberName] string memberName = "") {
             try {

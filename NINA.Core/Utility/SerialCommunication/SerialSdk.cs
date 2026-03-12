@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -51,7 +51,11 @@ namespace NINA.Core.Utility.SerialCommunication {
                 SerialPort?.Open();
             } catch (Exception ex) {
                 Logger.Error(ex);
+                #if WINDOWS
                 Notification.Notification.ShowError(string.Format(Locale.Loc.Instance["LblSerialPortCannotOpen"], SerialPort?.PortName, ex.GetType().Name));
+#else
+                Logger.Warning($"Serial port cannot open: {SerialPort?.PortName} - {ex.GetType().Name}");
+#endif
 
                 if (clients.Contains(client)) { clients.Remove(client); }
                 SerialPort = null;

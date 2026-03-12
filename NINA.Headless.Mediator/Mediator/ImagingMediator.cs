@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -21,6 +21,7 @@ using NINA.Image.Interfaces;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Media.Imaging;
 
 namespace NINA.WPF.Base.Mediator {
 
@@ -64,7 +65,7 @@ namespace NINA.WPF.Base.Mediator {
             handler.DestroyImage();
         }
 
-        public void SetImage(object img) {
+        public void SetImage(BitmapSource img) {
             handler.SetImage(img);
         }
 

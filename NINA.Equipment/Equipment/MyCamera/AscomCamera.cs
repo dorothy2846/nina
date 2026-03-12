@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -316,7 +316,7 @@ namespace NINA.Equipment.Equipment.MyCamera {
                         Logger.Info("ASCOM - Driver does not implement Gain SET");
                     } catch (InvalidValueException ex) {
                         Logger.Error(ex.Message);
-                        Notification.ShowExternalWarning(ex.Message, Loc.Instance["LblASCOMDriverError"]);
+                        Notification.ShowWarning(ex.Message);
                     } catch (Exception) {
                         CanSetGain = false;
                     }
@@ -526,7 +526,7 @@ namespace NINA.Equipment.Equipment.MyCamera {
                         Logger.Error(ex);
                         Notification.ShowExternalError(ex.Message, Loc.Instance["LblASCOMDriverError"]);
                     } catch (ASCOM.NotImplementedException) {
-                        ASCOMInteraction.LogComplianceIssue($"{nameof(ReadoutMode)} SET");
+                        Logger.Error($"ASCOM {nameof(ReadoutMode)} SET threw a NotImplementedException. This is a driver compliance issue and should be fixed by the driver vendor.");
                     }
                 }
             }

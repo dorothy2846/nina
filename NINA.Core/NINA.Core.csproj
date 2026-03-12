@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFrameworks>net9.0;net10.0-windows</TargetFrameworks>
     <OutputType>Library</OutputType>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <UseWPF>true</UseWPF>
-    <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
+    <UseWPF Condition="'$(TargetFramework)' == 'net10.0-windows'">true</UseWPF>
+    <ImportWindowsDesktopTargets Condition="'$(TargetFramework)' == 'net10.0-windows'">true</ImportWindowsDesktopTargets>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <Configurations>Debug;Release;SignedRelease</Configurations>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <EnableWindowsTargeting Condition="'$(TargetFramework)' == 'net10.0-windows'">true</EnableWindowsTargeting>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
     <IncludeSymbols>true</IncludeSymbols>
@@ -26,6 +26,29 @@
     <EmbeddedResource Remove="publish\**" />
     <None Remove="publish\**" />
     <Page Remove="publish\**" />
+  </ItemGroup>
+  <!-- Exclude WPF-only files when building for non-Windows targets -->
+  <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+    <Compile Remove="Utility\Converters\**" />
+    <Compile Remove="Utility\ValidationRules\**" />
+    <Compile Remove="Utility\ValidationRules.cs" />
+    <Compile Remove="Utility\Notification\**" />
+    <Compile Remove="Utility\WindowService\**" />
+    <Compile Remove="Utility\TabControlEx.cs" />
+    <Compile Remove="Utility\BindingProxy.cs" />
+    <Compile Remove="Utility\ButtonHelper.cs" />
+    <Compile Remove="Utility\DeferredContent.cs" />
+    <Compile Remove="Utility\DialogCloser.cs" />
+    <Compile Remove="Utility\DataPipes.cs" />
+    <Compile Remove="Utility\Extensions\WPFExtensions.cs" />
+    <Compile Remove="Utility\ColorSchema\ColorSchema.cs" />
+    <Compile Remove="Utility\Http\HttpDownloadImageRequest.cs" />
+    <Compile Remove="MyMessageBox\**" />
+    <Compile Remove="Model\IImageGeometryProvider.cs" />
+    <Compile Remove="Interfaces\IMyMessageBoxVM.cs" />
+    <Compile Remove="Properties\AssemblyInfo.cs" />
+    <Compile Remove="Utility\InvokeProcess.cs" />
+    <Compile Remove="Utility\ApplicationResourceDictionary.cs" />
   </ItemGroup>
   <ItemGroup>
     <Compile Include="..\CommonAssemblyInfo.cs">
@@ -78,7 +101,7 @@
     <PackageReference Include="System.Runtime.Caching" Version="10.0.2" />
   </ItemGroup>
   <ItemGroup>
-    <Resource Include="Resources\Logo_Nina.png" />
+    <Resource Condition="'$(TargetFramework)' == 'net10.0-windows'" Include="Resources\Logo_Nina.png" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Remove="Locale\Locale.ar-SA.resx" />

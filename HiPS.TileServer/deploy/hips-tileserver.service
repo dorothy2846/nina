@@ -1,0 +1,16 @@
+[Unit]
+Description=HiPS Tile Server - Astronomy sky map tile cache proxy
+After=network.target
+
+[Service]
+Type=simple
+User=nina
+WorkingDirectory=/opt/hips-tileserver
+ExecStart=/opt/hips-tileserver/HiPS.TileServer
+Restart=always
+RestartSec=5
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=ASPNETCORE_URLS=http://0.0.0.0:8080
+
+[Install]
+WantedBy=multi-user.target

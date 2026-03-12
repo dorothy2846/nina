@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -33,15 +33,21 @@ namespace NINA.Core.Utility {
         }
 
         public event EventHandler CanExecuteChanged {
+#if WINDOWS
             add => CommandManager.RequerySuggested += value;
             remove => CommandManager.RequerySuggested -= value;
+#else
+            add { }
+            remove { }
+#endif
         }
 
         protected void RaiseCanExecuteChanged() {
+#if WINDOWS
             CommandManager.InvalidateRequerySuggested();
+#endif
         }
     }
-
     [Obsolete($"Use {nameof(IAsyncRelayCommand)} instead, that utilizes MVVM Toolkit via CommunityToolkit.Mvvm.Input")]
     public interface IAsyncCommand : ICommand {
 
@@ -117,7 +123,11 @@ namespace NINA.Core.Utility {
             observable.PropertyChanged += (object sender, PropertyChangedEventArgs e) => {
                 foreach (var propertyName in propertyNames) {
                     if (e.PropertyName == propertyName) {
+                        #if WINDOWS
                         Application.Current.Dispatcher.BeginInvoke(value.NotifyCanExecuteChanged);
+#else
+                        value.NotifyCanExecuteChanged();
+#endif
                         return;
                     }
                 }

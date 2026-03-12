@@ -87,7 +87,10 @@ namespace NINA.Sequencer.SequenceItem.Autofocus {
                     filter = profileService.ActiveProfile.FilterWheelSettings.FilterWheelFilters.Where(x => x.Position == selectedFilter.Position).FirstOrDefault();
                 }
 
-                var report = await autoFocus.StartAutoFocus(filter, token, progress);
+                NINA.WPF.Base.Utility.AutoFocus.AutoFocusReport report = null;
+#if WINDOWS
+                report = await autoFocus.StartAutoFocus(filter, token, progress);
+#endif
 
                 token.ThrowIfCancellationRequested();
                 if (report == null) {

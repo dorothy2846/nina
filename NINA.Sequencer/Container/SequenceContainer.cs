@@ -69,11 +69,26 @@ namespace NINA.Sequencer.Container {
         [JsonProperty]
         public IList<ISequenceCondition> Conditions { get; protected set; } = new ObservableCollection<ISequenceCondition>();
 
-        public virtual ICommand DropIntoCommand => new GalaSoft.MvvmLight.Command.RelayCommand<DropIntoParameters>(DropInSequenceItem);
+        public virtual ICommand DropIntoCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<DropIntoParameters>(DropInSequenceItem);
+#else
+            null;
+#endif
 
-        public ICommand DropIntoConditionsCommand => new GalaSoft.MvvmLight.Command.RelayCommand<DropIntoParameters>(DropInSequenceCondition);
+        public ICommand DropIntoConditionsCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<DropIntoParameters>(DropInSequenceCondition);
+#else
+            null;
+#endif
 
-        public ICommand DropIntoTriggersCommand => new GalaSoft.MvvmLight.Command.RelayCommand<DropIntoParameters>(DropInSequenceTrigger);
+        public ICommand DropIntoTriggersCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<DropIntoParameters>(DropInSequenceTrigger);
+#else
+            null;
+#endif
 
         [JsonProperty]
         public virtual bool IsExpanded {
@@ -91,12 +106,17 @@ namespace NINA.Sequencer.Container {
         [JsonProperty]
         public IList<ISequenceItem> Items { get; protected set; } = new ObservableCollection<ISequenceItem>();
 
-        public override ICommand ResetProgressCommand => new GalaSoft.MvvmLight.Command.RelayCommand<object>(
+        public override ICommand ResetProgressCommand =>
+#if WINDOWS
+            new GalaSoft.MvvmLight.Command.RelayCommand<object>(
             (o) => {
                 ResetAll();
                 base.ResetProgressCommand.Execute(o);
             }
         );
+#else
+            null;
+#endif
 
         [JsonProperty]
         public IList<ISequenceTrigger> Triggers { get; protected set; } = new ObservableCollection<ISequenceTrigger>();
