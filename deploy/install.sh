@@ -25,6 +25,13 @@ systemctl daemon-reload
 systemctl enable nina-headless
 systemctl start nina-headless
 
+if [ -f "$(dirname "$0")/indiwebmanager.service" ]; then
+    cp "$(dirname "$0")/indiwebmanager.service" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable indiwebmanager
+    echo "INDI Web Manager service installed and enabled"
+fi
+
 # Install Avahi mDNS
 if command -v avahi-daemon &>/dev/null; then
     cp "$(dirname "$0")/nina-headless.avahi" /etc/avahi/services/

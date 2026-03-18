@@ -1,0 +1,16 @@
+[Unit]
+Description=INDI Server
+After=network.target
+Before=nina-headless.service
+
+[Service]
+Type=simple
+User=nina
+ExecStart=/usr/bin/indiserver -v
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=INDI Web Manager
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=nina
+ExecStart=/usr/local/bin/indi-web -v
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

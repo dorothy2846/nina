@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -27,52 +27,72 @@ using System.Threading.Tasks;
 namespace NINA.WPF.Base.Mediator {
 
     public class CameraMediator : DeviceMediator<ICameraVM, ICameraConsumer, CameraInfo>, ICameraMediator {
-        private object blockingConsumer;
+        private object? blockingConsumer;
+
+        private event Func<object, EventArgs, Task> _downloadTimeout;
 
         public event Func<object, EventArgs, Task> DownloadTimeout {
-            add { this.handler.DownloadTimeout += value; }
-            remove { this.handler.DownloadTimeout -= value; }
+            add { if (handler != null) handler.DownloadTimeout += value; else _downloadTimeout += value; }
+            remove { if (handler != null) handler.DownloadTimeout -= value; else _downloadTimeout -= value; }
         }
 
         public Task Capture(CaptureSequence sequence, CancellationToken token,
             IProgress<ApplicationStatus> progress) {
+            if (handler == null) {
+                return Task.CompletedTask;
+            }
             return handler.Capture(sequence, token, progress);
         }
 
         public IAsyncEnumerable<IExposureData> LiveView(CancellationToken token) {
+            if (handler == null) {
+                return EmptyLiveView();
+            }
             return handler.LiveView(new CaptureSequence(), token);
         }
 
         public IAsyncEnumerable<IExposureData> LiveView(CaptureSequence sequence, CancellationToken token) {
+            if (handler == null) {
+                return EmptyLiveView();
+            }
             return handler.LiveView(sequence, token);
         }
 
         public Task<IExposureData> Download(CancellationToken token) {
+            if (handler == null) {
+                return Task.FromResult<IExposureData>(default!);
+            }
             return handler.Download(token);
         }
 
         public Task<bool> CoolCamera(double temperature, TimeSpan duration, IProgress<ApplicationStatus> progress, CancellationToken ct) {
+            if (handler == null) {
+                return Task.FromResult(true);
+            }
             return handler.CoolCamera(temperature, duration, progress, ct);
         }
 
         public Task<bool> WarmCamera(TimeSpan duration, IProgress<ApplicationStatus> progress, CancellationToken ct) {
+            if (handler == null) {
+                return Task.FromResult(true);
+            }
             return handler.WarmCamera(duration, progress, ct);
         }
 
         public void AbortExposure() {
-            handler.AbortExposure();
+            handler?.AbortExposure();
         }
 
         public void SetReadoutMode(short value) {
-            handler.SetReadoutMode(value);
+            handler?.SetReadoutMode(value);
         }
 
         public void SetReadoutModeForNormalImages(short value) {
-            handler.SetReadoutModeForNormalImages(value);
+            handler?.SetReadoutModeForNormalImages(value);
         }
 
         public void SetBinning(short x, short y) {
-            handler.SetBinning(x, y);
+            handler?.SetBinning(x, y);
         }
 
         public void RegisterCaptureBlock(object cameraConsumer) {
@@ -93,12 +113,12 @@ namespace NINA.WPF.Base.Mediator {
             return blockingConsumer == null ? true : cameraConsumer == blockingConsumer;
         }
 
-        public bool AtTargetTemp => handler.AtTargetTemp;
+        public bool AtTargetTemp => handler?.AtTargetTemp ?? true;
 
-        public double TargetTemp => handler.TargetTemp;
+        public double TargetTemp => handler?.TargetTemp ?? 0;
 
         public void SetDewHeater(bool onOff) {
-            handler.SetDewHeater(onOff);
+            handler?.SetDewHeater(onOff);
         }
 
         public void RegisterCaptureBlock(ICameraConsumer cameraConsumer) {
@@ -114,11 +134,15 @@ namespace NINA.WPF.Base.Mediator {
         }
 
         public void SetUSBLimit(int usbLimit) {
-            handler.SetUSBLimit(usbLimit);
+            handler?.SetUSBLimit(usbLimit);
         }
 
         public void SetSubSambleRectangle(ObservableRectangle observableRectangle) {
-            handler.SetSubSambleRectangle(observableRectangle);
+            handler?.SetSubSambleRectangle(observableRectangle);
+        }
+
+        private static async IAsyncEnumerable<IExposureData> EmptyLiveView() {
+            yield break;
         }
     }
 }

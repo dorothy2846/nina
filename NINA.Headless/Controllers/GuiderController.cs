@@ -152,4 +152,24 @@ public class GuiderController : ControllerBase
             pixels = request.Pixels
         });
     }
+
+    [HttpPost("calibrate")]
+    public async Task<IActionResult> Calibrate()
+    {
+        var success = await _state.GuiderMediator.StartGuiding(
+            true,
+            new Progress<ApplicationStatus>(),
+            CancellationToken.None);
+
+        if (!success)
+        {
+            return StatusCode(500, new { success = false, message = "Calibration failed" });
+        }
+
+        return Ok(new
+        {
+            success = true,
+            message = "Calibration started"
+        });
+    }
 }

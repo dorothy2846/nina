@@ -1,7 +1,7 @@
 #region "copyright"
 
 /*
-    Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
+    Copyright ï¿½ 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
 
     This file is part of N.I.N.A. - Nighttime Imaging 'N' Astronomy.
 
@@ -35,13 +35,16 @@ namespace NINA.WPF.Base.Mediator {
         protected THandler handler;
         protected List<TConsumer> consumers = new List<TConsumer>();
 
+        private event Func<object, EventArgs, Task> _connected;
+        private event Func<object, EventArgs, Task> _disconnected;
+
         public event Func<object, EventArgs, Task> Connected {
-            add { this.handler.Connected += value; }
-            remove { this.handler.Connected -= value; }
+            add { if (handler != null) handler.Connected += value; else _connected += value; }
+            remove { if (handler != null) handler.Connected -= value; else _connected -= value; }
         }
         public event Func<object, EventArgs, Task> Disconnected {
-            add { this.handler.Disconnected += value; }
-            remove { this.handler.Disconnected -= value; }
+            add { if (handler != null) handler.Disconnected += value; else _disconnected += value; }
+            remove { if (handler != null) handler.Disconnected -= value; else _disconnected -= value; }
         }
 
         public void RegisterHandler(THandler handler) {            
@@ -121,23 +124,23 @@ namespace NINA.WPF.Base.Mediator {
         /// </summary>
         /// <returns></returns>
         public IDevice GetDevice() {
-            return handler.GetDevice();
+            return handler?.GetDevice();
         }
 
         public string Action(string actionName, string actionParameters) {
-            return handler.Action(actionName, actionParameters);
+            return handler?.Action(actionName, actionParameters);
         }
 
         public string SendCommandString(string command, bool raw = true) {
-            return handler.SendCommandString(command, raw);
+            return handler?.SendCommandString(command, raw);
         }
 
         public bool SendCommandBool(string command, bool raw = true) {
-            return handler.SendCommandBool(command, raw);
+            return handler?.SendCommandBool(command, raw) ?? false;
         }
 
         public void SendCommandBlind(string command, bool raw = true) {
-            handler.SendCommandBlind(command, raw);
+            handler?.SendCommandBlind(command, raw);
         }
     }
 }

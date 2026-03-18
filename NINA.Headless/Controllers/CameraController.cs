@@ -14,6 +14,8 @@ namespace NINA.Headless.Controllers;
 [Route("api/v1/[controller]")]
 public class CameraController : ControllerBase
 {
+    private static readonly byte[] TransparentPngPlaceholder = Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aGxQAAAAASUVORK5CYII=");
+
     private readonly NinaStateService _state;
     private readonly IHubContext<NinaHub> _hub;
 
@@ -55,12 +57,16 @@ public class CameraController : ControllerBase
     public IActionResult GetStatus()
     {
         var info = _state.CameraInfo;
+        var (exposureTime, exposureProgress) = _state.GetCameraExposureMetrics();
+
         if (info == null)
         {
             return Ok(new
             {
                 connected = false,
-                state = "disconnected"
+                state = "disconnected",
+                exposureTime = (double?)null,
+                exposureProgress = (double?)null
             });
         }
 
@@ -74,8 +80,21 @@ public class CameraController : ControllerBase
             state = info.CameraState.ToString(),
             gain = info.Gain,
             offset = info.Offset,
-            binning = info.BinX
+            binning = info.BinX,
+            exposureTime,
+            exposureProgress
         });
+    }
+
+    [HttpGet("latest")]
+    public IActionResult GetLatestImage()
+    {
+        if (_state.LatestImageData == null || _state.LatestImageData.Length == 0)
+        {
+            return NoContent();
+        }
+
+        return File(_state.LatestImageData, "image/png");
     }
 
     [HttpPost("connect")]
@@ -132,7 +151,9 @@ public class CameraController : ControllerBase
 
         try
         {
+            _state.MarkExposureStarted(request.ExposureTime);
             await _state.CameraMediator.Capture(sequence, CancellationToken.None, new Progress<ApplicationStatus>());
+            _state.LatestImageData = (byte[])TransparentPngPlaceholder.Clone();
             _state.NotifyStateChanged("camera", _state.BuildCameraStatus());
             await _hub.Clients.All.SendAsync("StatusUpdate", new
             {
@@ -145,6 +166,10 @@ public class CameraController : ControllerBase
         catch (Exception ex)
         {
             return StatusCode(500, new { success = false, message = ex.Message });
+        }
+        finally
+        {
+            _state.MarkExposureFinished();
         }
 
         return Ok(new

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using NINA.Astrometry;
 using NINA.Core.Enum;
 using NINA.Core.Model;
+using NINA.Equipment.Interfaces;
 using NINA.Headless.Models;
 using NINA.Headless.Hubs;
 using NINA.Headless.Services;
@@ -64,6 +65,7 @@ public class TelescopeController : ControllerBase
         return Ok(new
         {
             connected = info.Connected,
+            name = info.Name,
             ra = info.RightAscension,
             dec = info.Declination,
             alt = info.Altitude,
@@ -276,6 +278,44 @@ public class TelescopeController : ControllerBase
         {
             success = true,
             message = "Movement stopped"
+        });
+    }
+
+    [HttpPost("home")]
+    public async Task<IActionResult> Home()
+    {
+        var success = await _state.TelescopeMediator.FindHome(new Progress<ApplicationStatus>(), CancellationToken.None);
+        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
+
+        if (!success)
+        {
+            return StatusCode(500, new { success = false, message = "Failed to find home position" });
+        }
+
+        return Ok(new
+        {
+            success = true,
+            message = "Home requested"
+        });
+    }
+
+    [HttpGet("axisRates")]
+    public IActionResult AxisRates()
+    {
+        var telescope = _state.TelescopeMediator.GetDevice() as ITelescope;
+        var axes = Enum.GetValues<TelescopeAxes>();
+        var primaryAxis = axes.Length > 0 ? axes[0] : default;
+        var secondaryAxis = axes.Length > 1 ? axes[1] : primaryAxis;
+
+        var primary = telescope?.GetAxisRates(primaryAxis)?.Select(r => new { min = r.Item1, max = r.Item2 })
+            ?? Enumerable.Empty<object>();
+        var secondary = telescope?.GetAxisRates(secondaryAxis)?.Select(r => new { min = r.Item1, max = r.Item2 })
+            ?? Enumerable.Empty<object>();
+
+        return Ok(new
+        {
+            primary,
+            secondary
         });
     }
 

@@ -9,6 +9,8 @@ namespace NINA.Headless.Services;
 public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderConsumer
 {
     private readonly object _guideLock = new();
+    private DateTime? _exposureStartTimeUtc;
+    private double? _exposureDurationSeconds;
 
     public NinaStateService(
         ICameraMediator cameraMediator,
@@ -43,6 +45,8 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
 
     public List<GuidePoint> GuideHistory { get; } = new();
 
+    public byte[]? LatestImageData { get; set; }
+
     public event Action<string, object>? StateChanged;
 
     public void NotifyStateChanged(string type, object data)
@@ -53,8 +57,17 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
     public object BuildCameraStatus()
     {
         var info = CameraInfo;
+        var (exposureTime, exposureProgress) = GetCameraExposureMetrics();
+
         return info == null
-            ? new { connected = false as bool?, name = "Not connected", temperature = (double?)null }
+            ? new
+            {
+                connected = false as bool?,
+                name = "Not connected",
+                temperature = (double?)null,
+                exposureTime = (double?)null,
+                exposureProgress = (double?)null
+            }
             : new
             {
                 connected = info.Connected,
@@ -64,8 +77,53 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
                 gain = info.Gain,
                 offset = info.Offset,
                 binning = info.BinX,
-                state = info.CameraState.ToString()
+                state = info.CameraState.ToString(),
+                exposureTime,
+                exposureProgress
             };
+    }
+
+    public (double? exposureTime, double? exposureProgress) GetCameraExposureMetrics()
+    {
+        var info = CameraInfo;
+        if (info == null || !info.IsExposing)
+        {
+            return (null, null);
+        }
+
+        var nowUtc = DateTime.UtcNow;
+        var exposureEndUtc = ToUtc(info.ExposureEndTime);
+        var exposureTime = Math.Max(0d, (exposureEndUtc - nowUtc).TotalSeconds);
+
+        double? exposureProgress = null;
+        var totalSeconds = _exposureDurationSeconds;
+
+        if ((!totalSeconds.HasValue || totalSeconds.Value <= 0d) &&
+            _exposureStartTimeUtc.HasValue &&
+            exposureEndUtc > _exposureStartTimeUtc.Value)
+        {
+            totalSeconds = (exposureEndUtc - _exposureStartTimeUtc.Value).TotalSeconds;
+        }
+
+        if (totalSeconds is > 0d)
+        {
+            var elapsedSeconds = totalSeconds.Value - exposureTime;
+            exposureProgress = Math.Clamp(elapsedSeconds / totalSeconds.Value, 0d, 1d);
+        }
+
+        return (exposureTime, exposureProgress);
+    }
+
+    public void MarkExposureStarted(double exposureDurationSeconds)
+    {
+        _exposureStartTimeUtc = DateTime.UtcNow;
+        _exposureDurationSeconds = exposureDurationSeconds > 0d ? exposureDurationSeconds : null;
+    }
+
+    public void MarkExposureFinished()
+    {
+        _exposureStartTimeUtc = null;
+        _exposureDurationSeconds = null;
     }
 
     public object BuildTelescopeStatus()
@@ -113,6 +171,22 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
 
     void IDeviceConsumer<CameraInfo>.UpdateDeviceInfo(CameraInfo deviceInfo)
     {
+        if (deviceInfo.IsExposing && !_exposureStartTimeUtc.HasValue)
+        {
+            _exposureStartTimeUtc = DateTime.UtcNow;
+            var endUtc = ToUtc(deviceInfo.ExposureEndTime);
+            var inferredDuration = (endUtc - _exposureStartTimeUtc.Value).TotalSeconds;
+            if (inferredDuration > 0d)
+            {
+                _exposureDurationSeconds = inferredDuration;
+            }
+        }
+
+        if (!deviceInfo.IsExposing)
+        {
+            MarkExposureFinished();
+        }
+
         CameraInfo = deviceInfo;
         NotifyStateChanged("camera", BuildCameraStatus());
     }
@@ -154,6 +228,13 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
             historyCount = GuideHistory.Count
         });
     }
+
+    private static DateTime ToUtc(DateTime value) => value.Kind switch
+    {
+        DateTimeKind.Utc => value,
+        DateTimeKind.Local => value.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(value, DateTimeKind.Local).ToUniversalTime()
+    };
 }
 
 public record GuidePoint(double RA, double Dec, DateTime Timestamp);

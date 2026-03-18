@@ -15,6 +15,14 @@ public class NinaHub : Hub
     public override async Task OnConnectedAsync()
     {
         await Clients.Caller.SendAsync("EquipmentStatus", _state.BuildEquipmentStatus());
+        await Clients.Caller.SendAsync("SequenceUpdate", new
+        {
+            running = false,
+            progress = 0.0,
+            currentTarget = (string?)null,
+            sequences = Array.Empty<object>(),
+            timestamp = DateTime.UtcNow
+        });
         await Clients.Caller.SendAsync("GuideHistory", _state.GuideHistory);
         await base.OnConnectedAsync();
     }

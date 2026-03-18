@@ -30,6 +30,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cp "$SCRIPT_DIR/hostapd.conf" /etc/hostapd/hostapd.conf
 cp "$SCRIPT_DIR/dnsmasq-ap.conf" /etc/dnsmasq.d/beyondstellar.conf
 
+# Set unique SSID from MAC address
+MAC=$(cat /sys/class/net/wlan0/address 2>/dev/null || echo "00:00:00:00:00:00")
+SUFFIX=$(echo "$MAC" | tr -d ':' | tail -c 5 | tr 'a-f' 'A-F')
+sed -i "s/^ssid=BeyondStellar$/ssid=BeyondStellar-${SUFFIX}/" /etc/hostapd/hostapd.conf
+
 # Unmask and enable hostapd
 systemctl unmask hostapd
 systemctl enable hostapd
@@ -49,7 +54,7 @@ systemctl start wifi-watchdog
 
 echo ""
 echo "=== WiFi AP Setup Complete ==="
-echo "SSID: BeyondStellar"
+echo "SSID: BeyondStellar-${SUFFIX}"
 echo "Password: BeyondStellar!"
 echo "Server IP: 192.168.4.1"
 echo "DHCP Range: 192.168.4.2 - 192.168.4.20"

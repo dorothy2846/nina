@@ -8,5 +8,6 @@
     <txt-record>path=/api/v1</txt-record>
     <txt-record>version=1.0.0</txt-record>
     <txt-record>app=beyond-stellar</txt-record>
+    <txt-record>device-id=%h</txt-record>
   </service>
 </service-group>
