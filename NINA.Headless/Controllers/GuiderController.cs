@@ -13,11 +13,13 @@ public class GuiderController : ControllerBase
 {
     private readonly NinaStateService _state;
     private readonly IHubContext<NinaHub> _hub;
+    private readonly SmartGuiderAiService _aiGuider;
 
-    public GuiderController(NinaStateService state, IHubContext<NinaHub> hub)
+    public GuiderController(NinaStateService state, IHubContext<NinaHub> hub, SmartGuiderAiService aiGuider)
     {
         _state = state;
         _hub = hub;
+        _aiGuider = aiGuider;
     }
 
     [HttpGet("info")]
@@ -170,6 +172,35 @@ public class GuiderController : ControllerBase
         {
             success = true,
             message = "Calibration started"
+        });
+    }
+
+    [HttpPost("ai-start")]
+    public IActionResult StartAi()
+    {
+        if (_aiGuider.IsRunning)
+        {
+            return BadRequest(new { success = false, message = "AI Guider is already running" });
+        }
+
+        _aiGuider.StartAiGuiding();
+
+        return Ok(new
+        {
+            success = true,
+            message = "AI Smart Guider started"
+        });
+    }
+
+    [HttpPost("ai-stop")]
+    public IActionResult StopAi()
+    {
+        _aiGuider.StopAiGuiding();
+
+        return Ok(new
+        {
+            success = true,
+            message = "AI Smart Guider stopped"
         });
     }
 }

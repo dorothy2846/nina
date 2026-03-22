@@ -1,0 +1,15 @@
+<Project>
+  <!-- 
+    NinaHeadlessLite 플래그가 주어졌을 때 라즈베리 파이 구동을 위해 무거운 패키지와 
+    윈도우/ASCOM 종속성을 강제로 제거합니다.
+  -->
+  <PropertyGroup Condition="'$(NinaHeadlessLite)' == 'true'">
+    <DefineConstants>$(DefineConstants);NINA_HEADLESS_LITE</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(NinaHeadlessLite)' == 'true'">
+    <PackageReference Remove="Accord.Math" />
+    <PackageReference Remove="System.Data.SqlClient" />
+
+  </ItemGroup>
+</Project>

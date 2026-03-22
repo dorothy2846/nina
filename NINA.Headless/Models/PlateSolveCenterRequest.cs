@@ -9,4 +9,5 @@ public record PlateSolveCenterRequest
     public int Binning { get; init; } = 2;
     public int MaxAttempts { get; init; } = 5;
     public double ThresholdDegrees { get; init; } = 0.01;
+    public double Tolerance { get; init; } = 0.05;
 }

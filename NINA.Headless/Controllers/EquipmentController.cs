@@ -56,7 +56,7 @@ public class EquipmentController : ControllerBase
                 connected = focuserInfo?.Connected ?? false,
                 name = focuserInfo?.Name ?? "No Focuser",
                 position = (int?)focuserInfo?.Position,
-                temperature = focuserInfo != null && !double.IsNaN(focuserInfo.Temperature) ? focuserInfo.Temperature : null,
+                temperature = focuserInfo != null && !double.IsNaN(focuserInfo.Temperature) ? focuserInfo.Temperature : (double?)null,
                 isMoving = (bool?)focuserInfo?.IsMoving
             },
             filterWheel = new

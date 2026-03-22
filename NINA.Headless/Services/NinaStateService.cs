@@ -47,6 +47,18 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
 
     public byte[]? LatestImageData { get; set; }
 
+    // Image Stretch parameters
+    public double StretchBlackPoint { get; private set; } = 0.0;
+    public double StretchWhitePoint { get; private set; } = 1.0;
+    public bool AutoStretchEnabled { get; private set; } = true;
+
+    public void SetImageStretchParams(double black, double white, bool autoEnabled)
+    {
+        StretchBlackPoint = black;
+        StretchWhitePoint = white;
+        AutoStretchEnabled = autoEnabled;
+    }
+
     public event Action<string, object>? StateChanged;
 
     public void NotifyStateChanged(string type, object data)

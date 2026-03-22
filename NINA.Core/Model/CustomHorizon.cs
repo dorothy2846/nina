@@ -1,4 +1,4 @@
-﻿#region "copyright"
+#region "copyright"
 
 /*
     Copyright © 2016 - 2026 Stefan Berg <isbeorn86+NINA@googlemail.com> and the N.I.N.A. contributors
@@ -36,7 +36,11 @@ namespace NINA.Core.Model {
 
         public double GetAltitude(double azimuth) {
             if (azimuth < 0 || azimuth > 359) { azimuth = Utility.CoreUtil.EuclidianModulus(azimuth, 360); }
+#if NINA_HEADLESS_LITE
+            return 0;
+#else
             return Accord.Math.Tools.Interpolate1D(azimuth, azimuths, altitudes, 0, 0);
+#endif
         }
 
         public double GetMaxAltitude() {

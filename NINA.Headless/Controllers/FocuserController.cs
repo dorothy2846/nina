@@ -1,7 +1,16 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
+using NINA.Core.Model.Equipment;
 using NINA.Headless.Models;
+using NINA.Headless.Hubs;
+using NINA.Headless.Services;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using System;
+using System.Linq;
 
 namespace NINA.Headless.Controllers;
 
@@ -10,89 +19,36 @@ namespace NINA.Headless.Controllers;
 public class FocuserController : ControllerBase
 {
     private static readonly object AutoFocusLock = new();
-    private static bool _autoFocusRunning;
-    private static bool _autoFocusCompleted;
-    private static int? _autoFocusBestPosition;
-    private static double? _autoFocusBestHfr;
-    private static double? _autoFocusTemperature;
-    private static List<object> _autoFocusDataPoints = [];
     private static CancellationTokenSource? _autoFocusCts;
 
     private readonly IFocuserMediator _focuser;
+    private readonly NinaStateService _state;
+    private readonly IHubContext<NinaHub> _hub;
+    private readonly OneShotAiService _aiService;
 
-    public FocuserController(IFocuserMediator focuser)
+    public FocuserController(IFocuserMediator focuser, NinaStateService state, IHubContext<NinaHub> hub, OneShotAiService aiService)
     {
         _focuser = focuser;
+        _state = state;
+        _hub = hub;
+        _aiService = aiService;
     }
 
     [HttpGet("info")]
     public IActionResult GetInfo()
     {
         var info = _focuser.GetInfo();
+        if (info == null) return Ok(new { connected = false });
+
         var device = _focuser.GetDevice() as IFocuser;
-
-        if (info == null)
-        {
-            return Ok(new { connected = false, name = "Not connected" });
-        }
-
         return Ok(new
         {
             connected = info.Connected,
             name = info.Name,
             position = info.Position,
-            temperature = double.IsNaN(info.Temperature) ? null : info.Temperature,
+            temperature = double.IsNaN(info.Temperature) ? (double?)null : info.Temperature,
             stepSize = info.StepSize,
-            maxStep = device?.MaxStep,
-            maxIncrement = device?.MaxIncrement,
-            isMoving = info.IsMoving,
-            temperatureCompensation = info.TempComp
-        });
-    }
-
-    [HttpGet("status")]
-    public IActionResult GetStatus()
-    {
-        var info = _focuser.GetInfo();
-        if (info == null)
-        {
-            return Ok(new { connected = false, state = "disconnected" });
-        }
-
-        return Ok(new
-        {
-            connected = info.Connected,
-            position = info.Position,
-            temperature = double.IsNaN(info.Temperature) ? null : info.Temperature,
             isMoving = info.IsMoving
-        });
-    }
-
-    [HttpPost("connect")]
-    public async Task<IActionResult> Connect([FromBody] ConnectRequest? request)
-    {
-        var success = await _focuser.Connect();
-        if (!success)
-        {
-            return StatusCode(503, new { success = false, message = "Failed to connect focuser", deviceId = request?.DeviceId ?? "default" });
-        }
-
-        return Ok(new
-        {
-            success = true,
-            message = "Focuser connected",
-            deviceId = request?.DeviceId ?? "default"
-        });
-    }
-
-    [HttpPost("disconnect")]
-    public async Task<IActionResult> Disconnect()
-    {
-        await _focuser.Disconnect();
-        return Ok(new
-        {
-            success = true,
-            message = "Focuser disconnected"
         });
     }
 
@@ -100,25 +56,7 @@ public class FocuserController : ControllerBase
     public async Task<IActionResult> Move([FromBody] FocuserMoveRequest request)
     {
         var movedTo = await _focuser.MoveFocuser(request.Position, CancellationToken.None);
-        return Ok(new
-        {
-            success = true,
-            message = $"Moved focuser to {movedTo}",
-            position = movedTo
-        });
-    }
-
-    [HttpPost("halt")]
-    public IActionResult Halt()
-    {
-        var device = _focuser.GetDevice() as IFocuser;
-        device?.Halt();
-
-        return Ok(new
-        {
-            success = true,
-            message = "Focuser halt requested"
-        });
+        return Ok(new { success = true, position = movedTo });
     }
 
     [HttpPost("autofocus/start")]
@@ -128,61 +66,107 @@ public class FocuserController : ControllerBase
         {
             _autoFocusCts?.Cancel();
             _autoFocusCts = new CancellationTokenSource();
-            _autoFocusRunning = true;
-            _autoFocusCompleted = false;
-
-            var info = _focuser.GetInfo();
-            var currentPosition = info?.Position ?? 0;
-            _autoFocusBestPosition = currentPosition;
-            _autoFocusBestHfr = 1.8;
-            _autoFocusTemperature = info != null && !double.IsNaN(info.Temperature) ? info.Temperature : null;
-            _autoFocusDataPoints =
-            [
-                new { position = currentPosition - 200, hfr = 3.2 },
-                new { position = currentPosition - 100, hfr = 2.4 },
-                new { position = currentPosition, hfr = 1.8 },
-                new { position = currentPosition + 100, hfr = 2.5 },
-                new { position = currentPosition + 200, hfr = 3.3 }
-            ];
 
             var token = _autoFocusCts.Token;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(TimeSpan.FromSeconds(2), token);
-                    lock (AutoFocusLock)
-                    {
-                        if (token.IsCancellationRequested) return;
-                        _autoFocusRunning = false;
-                        _autoFocusCompleted = true;
-                    }
-                }
-                catch (TaskCanceledException)
-                {
-                    // ignored
-                }
-            }, token);
+            _ = Task.Run(() => PerformAutofocusAsync(token), token);
         }
 
         return Ok(new { success = true, message = "Autofocus started" });
     }
 
-    [HttpGet("autofocus/status")]
-    public IActionResult AutoFocusStatus()
+    private async Task PerformAutofocusAsync(CancellationToken token)
     {
-        lock (AutoFocusLock)
+        try
         {
-            return Ok(new
+            var profile = ProfileSyncController.ActiveCloudProfile;
+            int stepSize = profile?.FocuserStepSize ?? 50;
+            int initialOffsets = profile?.InitialOffsetSteps ?? 4;
+            int backlash = profile?.Backlash ?? 1000;
+
+            var info = _focuser.GetInfo();
+            if (info == null || !info.Connected) throw new Exception("Focuser not connected");
+
+            int initialPosition = info.Position;
+            int outerBoundary = initialPosition + (stepSize * initialOffsets);
+            int totalPoints = (initialOffsets * 2) + 1;
+
+            var points = new List<AutofocusMath.FocuserPoint>();
+
+            await BroadcastAfStatusAsync(true, false, null, points);
+
+            // 1. Move to Outer Boundary (With Overshoot for Backlash)
+            await _focuser.MoveFocuser(outerBoundary + backlash, token);
+            await _focuser.MoveFocuser(outerBoundary, token);
+            await Task.Delay(2000, token); // Settle
+
+            int currentTarget = outerBoundary;
+            int simulatedPerfectFocus = initialPosition - (stepSize / 2); // Mock exact point for testing
+
+            for (int i = 0; i < totalPoints; i++)
             {
-                running = _autoFocusRunning,
-                completed = _autoFocusCompleted,
-                bestPosition = _autoFocusBestPosition,
-                bestHFR = _autoFocusBestHfr,
-                temperature = _autoFocusTemperature,
-                dataPoints = _autoFocusDataPoints
-            });
+                if (token.IsCancellationRequested) break;
+
+                // Move IN
+                if (i > 0)
+                {
+                    currentTarget -= stepSize;
+                    await _focuser.MoveFocuser(currentTarget, token);
+                    await Task.Delay(2000, token); // Settle
+                }
+
+                // Simulate Capture & HFD Measurement (Math.Abs distance creates a perfect V curve)
+                // In reality: await _state.CameraMediator.Capture(...) -> extract HFD
+                await Task.Delay(1000, token); // Simulate capture time
+                
+                double distance = Math.Abs(currentTarget - simulatedPerfectFocus);
+                // Hyperbolic simulation: y = a * cosh(t)
+                double a = 2.0; // min HFD
+                double b = 150.0;
+                double hfd = a * Math.Cosh(distance / b) + (new Random().NextDouble() * 0.2); // Add light noise
+
+                points.Add(new AutofocusMath.FocuserPoint(currentTarget, hfd));
+                
+                // RANSAC / IQR Filtering
+                points = AutofocusMath.FilterOutliers(points);
+
+                // Live Fit calculation
+                var fit = AutofocusMath.CalculateHyperbolicFit(points);
+
+                await BroadcastAfStatusAsync(true, false, fit, points);
+            }
+
+            // 2. Final Fit and Slew
+            var finalFit = AutofocusMath.CalculateHyperbolicFit(points);
+            
+            if (finalFit.Success)
+            {
+                int targetFocus = (int)finalFit.P;
+                
+                // Backlash Overshoot outwards, then in
+                await _focuser.MoveFocuser(targetFocus + backlash, token);
+                await _focuser.MoveFocuser(targetFocus, token);
+            }
+
+            await BroadcastAfStatusAsync(false, true, finalFit, points);
         }
+        catch (Exception)
+        {
+            await _hub.Clients.All.SendAsync("AutofocusError", "Routine failed or aborted");
+        }
+    }
+
+    private async Task BroadcastAfStatusAsync(bool running, bool completed, AutofocusMath.HyperbolicFitResult? fit, List<AutofocusMath.FocuserPoint> points)
+    {
+        var payload = new
+        {
+            running,
+            completed,
+            points = points.Select(p => new { x = p.Position, y = p.Hfd, isOutlier = p.IsOutlier }),
+            fitParameters = fit != null && fit.Success ? new { a = fit.A, b = fit.B, p = fit.P } : null,
+            optimalPosition = fit != null && fit.Success ? fit.P : (double?)null
+        };
+
+        await _hub.Clients.All.SendAsync("AutofocusLiveUpdate", payload);
     }
 
     [HttpPost("autofocus/stop")]
@@ -191,10 +175,71 @@ public class FocuserController : ControllerBase
         lock (AutoFocusLock)
         {
             _autoFocusCts?.Cancel();
-            _autoFocusRunning = false;
-            _autoFocusCompleted = false;
         }
+        return Ok(new { success = true });
+    }
 
-        return Ok(new { success = true, message = "Autofocus stopped" });
+    [HttpPost("ai-autofocus/calibrate")]
+    public async Task<IActionResult> CalibrateAiOneShot()
+    {
+        // 실시간 캘리브레이션 모의 진행 (현재 사진 -> 200스텝 이동 -> 비율 도출)
+        await Task.Delay(5000); 
+        return Ok(new { success = true, multiplier = 4.2 }); // 1 micron = 4.2 steps 상수 도출
+    }
+
+    [HttpPost("ai-autofocus/start")]
+    public IActionResult StartAiOneShot()
+    {
+        lock (AutoFocusLock)
+        {
+            _autoFocusCts?.Cancel();
+            _autoFocusCts = new CancellationTokenSource();
+
+            var token = _autoFocusCts.Token;
+            _ = Task.Run(() => PerformAiOneShotAsync(token), token);
+        }
+        return Ok(new { success = true, message = "AI Autofocus started" });
+    }
+
+    private async Task PerformAiOneShotAsync(CancellationToken token)
+    {
+        try
+        {
+            await _hub.Clients.All.SendAsync("AiAutofocusLiveUpdate", new { running = true, completed = false });
+
+            // 1. 카메라 연동해서 사진 촬영 (모의 딜레이)
+            await Task.Delay(2000, token);
+            string mockImagePath = "mock.jpg";
+
+            // 2. AI 딥러닝 추론 (거리 도출)
+            float offsetDistance = _aiService.PredictOffset(mockImagePath);
+
+            // 3. Multiplier (현재 프로필 또는 캘리브레이션에서 획득) 기반 포커서 스텝 계산
+            float stepMultiplier = 4.2f; 
+            int stepsToMove = (int)(offsetDistance * stepMultiplier);
+
+            // 4. 모터 움직임 (단 1회)
+            var info = _focuser.GetInfo();
+            if (info != null && info.Connected)
+            {
+                int currentPosition = info.Position;
+                int targetPosition = currentPosition + stepsToMove;
+                await _focuser.MoveFocuser(targetPosition, token);
+            }
+
+            // 5. 완료 알림
+            await _hub.Clients.All.SendAsync("AiAutofocusLiveUpdate", new { 
+                running = false, 
+                completed = true, 
+                offsetPredicted = offsetDistance, 
+                stepsMoved = stepsToMove,
+                finalPosition = info?.Position ?? 0
+            });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[AiAutofocus] Error: {ex.Message}");
+            await _hub.Clients.All.SendAsync("AutofocusError", "AI Autofocus aborted");
+        }
     }
 }

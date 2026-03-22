@@ -37,14 +37,20 @@ builder.Services.AddSingleton<IRotatorMediator>(sp => sp.GetRequiredService<Rota
 builder.Services.AddSingleton<DomeMediator>();
 builder.Services.AddSingleton<IDomeMediator>(sp => sp.GetRequiredService<DomeMediator>());
 builder.Services.AddSingleton<NinaStateService>();
+builder.Services.AddSingleton<OneShotAiService>();
+builder.Services.AddSingleton<SmartGuiderAiService>();
 builder.Services.AddSingleton<SequencerService>();
 builder.Services.AddHostedService<SimulatorService>();
 builder.Services.AddHostedService<EquipmentStatusBroadcaster>();
 
-// Configure Kestrel to listen on port 1888 (Touch'N'Stars compatible)
-builder.WebHost.ConfigureKestrel(options =>
+// Configure Kestrel to listen on port 1888
+builder.WebHost.ConfigureKestrel(serverOptions =>
 {
-    options.ListenAnyIP(1888);
+    serverOptions.ListenAnyIP(1888, listenOptions =>
+    {
+        // iOS 시뮬레이터에서 로컬 통신 시 자체 서명 인증서(SSL) 거부 문제를 피하기 위해 일반 HTTP로 개방
+        listenOptions.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http1AndHttp2;
+    });
 });
 
 var app = builder.Build();
@@ -56,6 +62,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseWebSockets(); // For SignalR fallback
 app.UseRouting();
 app.UseAuthorization();
 app.MapControllers();
