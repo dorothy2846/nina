@@ -38,10 +38,55 @@ builder.Services.AddSingleton<DomeMediator>();
 builder.Services.AddSingleton<IDomeMediator>(sp => sp.GetRequiredService<DomeMediator>());
 builder.Services.AddSingleton<NinaStateService>();
 builder.Services.AddSingleton<OneShotAiService>();
-builder.Services.AddSingleton<SmartGuiderAiService>();
 builder.Services.AddSingleton<SequencerService>();
+builder.Services.AddSingleton<EquipmentSelectionService>();
+builder.Services.AddSingleton<CameraSelectionService>();
+// Windows-only PHD2 adapter (registry prefs + ShowWindow hide).
+if (NINA.Headless.Services.PlatformPaths.IsWindows)
+    builder.Services.AddSingleton<NINA.Headless.Services.Platform.WindowsPhd2Support>();
+builder.Services.AddSingleton<AlpacaClient>();
+builder.Services.AddSingleton<AutoCalibrationOrchestrator>();
+
+// AP-mode provider selection — one impl per platform, Linux uses nmcli, Windows uses
+// Mobile Hotspot via PowerShell/WinRT, macOS returns unsupported. WifiFallbackOrchestrator
+// then auto-enters AP mode on boot when no home WiFi is reachable (ASIAIR UX).
+if (NINA.Headless.Services.PlatformPaths.IsLinux)
+    builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.LinuxNmcliApMode>();
+else if (NINA.Headless.Services.PlatformPaths.IsWindows)
+    builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.WindowsMobileHotspotApMode>();
+else
+    builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.MacOsUnsupportedApMode>();
+builder.Services.AddSingleton<NINA.Headless.Services.Network.ApModeConfigStore>();
+builder.Services.AddHostedService<NINA.Headless.Services.Network.WifiFallbackOrchestrator>();
+
+// Remote access via rendezvous + WebRTC DataChannel. Observatory registers itself with
+// our Azure signaling server on boot; iOS app (controller) dials in by machineId.
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousConfigStore>();
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.RemoteEventBus>();
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousClient>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.Remote.RendezvousClient>());
+// Factory resolves the optional Windows adapter — on macOS/Linux the parameter is null
+// and Phd2Service takes its native path. Avoids leaking IServiceProvider into the service.
+builder.Services.AddSingleton(sp => new Phd2Service(
+    sp.GetRequiredService<ILogger<Phd2Service>>(),
+    NINA.Headless.Services.PlatformPaths.IsWindows
+        ? sp.GetService<NINA.Headless.Services.Platform.WindowsPhd2Support>()
+        : null));
+builder.Services.AddSingleton<IndiServerManager>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiServerManager>());
+builder.Services.AddSingleton<IndiDiscoveryService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiDiscoveryService>());
+builder.Services.AddSingleton<CaptureStore>();
+builder.Services.AddSingleton<H264Transcoder>();
+builder.Services.AddSingleton<CameraStreamService>();
+builder.Services.AddSingleton<WebRTCService>();
+builder.Services.AddSingleton<FlatWizardService>();
+builder.Services.AddSingleton<CalibrationBatchService>();
+builder.Services.AddSingleton<CalibrationLibrary>();
+builder.Services.AddSingleton<LiveStackService>();
 builder.Services.AddHostedService<SimulatorService>();
 builder.Services.AddHostedService<EquipmentStatusBroadcaster>();
+builder.Services.AddHostedService<AlpacaDiscoveryService>();
 
 // Configure Kestrel to listen on port 1888
 builder.WebHost.ConfigureKestrel(serverOptions =>
@@ -53,7 +98,15 @@ builder.WebHost.ConfigureKestrel(serverOptions =>
     });
 });
 
+// mDNS broadcast so BeyondStellar iOS auto-discovers this server on LAN.
+builder.Services.AddHostedService<NINA.Headless.Services.MdnsBroadcastService>();
+
 var app = builder.Build();
+
+// Route SIPSorcery's internal logs through our ILoggerFactory so ICE / DTLS failures are
+// visible. Without this, peer-state transitions go to stderr directly and never reach any
+// of our log sinks.
+SIPSorcery.LogFactory.Set(app.Services.GetRequiredService<ILoggerFactory>());
 
 // Configure the HTTP request pipeline.
 if (app.Environment.IsDevelopment())
@@ -68,8 +121,60 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHub<NinaHub>("/ws/nina");
 
+// Camera live stream WebSocket. Binary frames (JPEG) from server → client; client-sent
+// messages are ignored for now. Auto-starts the capture loop on first client, auto-stops
+// on last disconnect. Control (exposure, max FPS) goes through the REST endpoints.
+app.Map("/ws/camera/stream", async (HttpContext ctx, NINA.Headless.Services.CameraStreamService stream) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    await stream.AddJpegClientAsync(ws, ctx.RequestAborted);
+});
+
+// H.264 Annex B transport. Each binary frame is one NAL unit preceded by a 4-byte start code.
+// Clients concatenate NALUs into a decoder input buffer; CMVideoFormatDescription is built from
+// the SPS/PPS NALUs that the encoder injects ahead of every keyframe.
+app.Map("/ws/camera/stream/h264", async (HttpContext ctx, NINA.Headless.Services.CameraStreamService stream) =>
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
+    await stream.AddH264ClientAsync(ws, ctx.RequestAborted);
+});
+
+// WebRTC signaling. Single HTTP POST for the offer/answer exchange — simpler than a
+// dedicated signaling WebSocket and good enough for 1:1 peer.
+app.MapPost("/api/v1/rtc/offer", async (HttpContext ctx, NINA.Headless.Services.WebRTCService rtc) =>
+{
+    using var reader = new StreamReader(ctx.Request.Body);
+    var offerSdp = await reader.ReadToEndAsync();
+    if (string.IsNullOrWhiteSpace(offerSdp)) return Results.BadRequest(new { error = "empty SDP" });
+    try
+    {
+        var (answer, peerId) = await rtc.CreatePeerForOfferAsync(offerSdp);
+        return Results.Ok(new { peerId, sdp = answer });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(detail: ex.Message, statusCode: 500);
+    }
+});
+
+app.MapPost("/api/v1/rtc/close/{peerId}", async (string peerId, NINA.Headless.Services.WebRTCService rtc) =>
+{
+    await rtc.ClosePeerAsync(peerId);
+    return Results.Ok(new { success = true });
+});
+
+// Quick browser-based test page — lets us verify the server's WebRTC pipeline before
+// building the iOS client. Served at /rtc-test.html.
+app.MapGet("/rtc-test.html", () => Results.Content(WebRTCTestPage.Html, "text/html"));
+
 // Health check endpoint
-app.MapGet("/api/v1/health", () => new { status = "ok", version = "1.0.0", platform = "linux-x64" });
+app.MapGet("/api/v1/health", () => new {
+    status = "ok",
+    version = "1.0.0",
+    platform = NINA.Headless.Services.PlatformPaths.PlatformName
+});
 
 // Captive portal responses — trick iOS/Android into thinking WiFi has internet
 // This prevents devices from disconnecting from the no-internet WiFi AP

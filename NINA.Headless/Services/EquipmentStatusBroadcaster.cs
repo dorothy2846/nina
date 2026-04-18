@@ -1,17 +1,16 @@
-using Microsoft.AspNetCore.SignalR;
-using NINA.Headless.Hubs;
+using NINA.Headless.Services.Remote;
 
 namespace NINA.Headless.Services;
 
 public class EquipmentStatusBroadcaster : BackgroundService
 {
-    private readonly IHubContext<NinaHub> _hub;
+    private readonly RemoteEventBus _eventBus;
     private readonly NinaStateService _state;
     private readonly SequencerService _sequencer;
 
-    public EquipmentStatusBroadcaster(IHubContext<NinaHub> hub, NinaStateService state, SequencerService sequencer)
+    public EquipmentStatusBroadcaster(RemoteEventBus eventBus, NinaStateService state, SequencerService sequencer)
     {
-        _hub = hub;
+        _eventBus = eventBus;
         _state = state;
         _sequencer = sequencer;
         _state.StateChanged += OnStateChanged;
@@ -24,22 +23,22 @@ public class EquipmentStatusBroadcaster : BackgroundService
         {
             var sequencerStatus = _sequencer.GetStatus();
 
-            await _hub.Clients.All.SendAsync("StatusUpdate", new
+            _eventBus.Broadcast("StatusUpdate", new
             {
                 timestamp = DateTime.UtcNow,
                 camera = _state.BuildCameraStatus(),
                 telescope = _state.BuildTelescopeStatus(),
                 guider = _state.BuildGuiderStatus()
-            }, stoppingToken);
+            });
 
-            await _hub.Clients.All.SendAsync("SequenceUpdate", new
+            _eventBus.Broadcast("SequenceUpdate", new
             {
                 running = sequencerStatus.Running,
                 progress = sequencerStatus.Progress,
                 currentTarget = sequencerStatus.CurrentTarget,
                 sequences = _sequencer.GetSequenceList(),
                 timestamp = sequencerStatus.Timestamp
-            }, stoppingToken);
+            });
 
             await Task.Delay(1000, stoppingToken);
         }
@@ -54,13 +53,13 @@ public class EquipmentStatusBroadcaster : BackgroundService
 
     private void OnStateChanged(string type, object data)
     {
-        _ = _hub.Clients.Group(type).SendAsync("StateChanged", new { type, data });
-        _ = _hub.Clients.All.SendAsync("EquipmentStatus", _state.BuildEquipmentStatus());
+        _eventBus.BroadcastGroup(type, "StateChanged", new { type, data });
+        _eventBus.Broadcast("EquipmentStatus", _state.BuildEquipmentStatus());
     }
 
     private void OnSequencerStateChanged(SequencerStateDto state)
     {
-        _ = _hub.Clients.All.SendAsync("SequenceUpdate", new
+        _eventBus.Broadcast("SequenceUpdate", new
         {
             running = state.Running,
             progress = state.Progress,

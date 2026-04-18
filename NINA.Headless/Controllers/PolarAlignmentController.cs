@@ -3,12 +3,11 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using NINA.Astrometry;
 using NINA.Core.Model.Equipment;
 using NINA.Equipment.Interfaces.Mediator;
-using NINA.Headless.Hubs;
 using NINA.Headless.Services;
+using NINA.Headless.Services.Remote;
 using NINA.Equipment.Model;
 using NINA.Core.Model;
 
@@ -32,13 +31,13 @@ public class PolarAlignmentController : ControllerBase
 
     private readonly NinaStateService _state;
     private readonly HeadlessAstapSolver _solver;
-    private readonly IHubContext<NinaHub> _hub;
+    private readonly RemoteEventBus _eventBus;
 
-    public PolarAlignmentController(NinaStateService state, HeadlessAstapSolver solver, IHubContext<NinaHub> hub)
+    public PolarAlignmentController(NinaStateService state, HeadlessAstapSolver solver, RemoteEventBus eventBus)
     {
         _state = state;
         _solver = solver;
-        _hub = hub;
+        _eventBus = eventBus;
     }
 
     [HttpPost("start")]
@@ -81,8 +80,8 @@ public class PolarAlignmentController : ControllerBase
                 var sequence = new CaptureSequence(4.0, CaptureSequence.ImageTypes.LIGHT, null, new BinningMode(2, 2), 1);
                 await _state.CameraMediator.Capture(sequence, token, new Progress<ApplicationStatus>());
                 
-                var tempDir = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) 
-                    && Directory.Exists("/dev/shm") ? "/dev/shm" : Path.GetTempPath();
+                var tempDir = PlatformPaths.IsLinux && Directory.Exists("/dev/shm")
+                    ? "/dev/shm" : Path.GetTempPath();
                 var tempImage = Path.Combine(tempDir, $"pa_{Guid.NewGuid()}.jpg");
                 await System.IO.File.WriteAllBytesAsync(tempImage, _state.LatestImageData!, token);
 
@@ -140,8 +139,8 @@ public class PolarAlignmentController : ControllerBase
                 var sequence = new CaptureSequence(2.0, CaptureSequence.ImageTypes.LIGHT, null, new BinningMode(2, 2), 1);
                 await _state.CameraMediator.Capture(sequence, token, new Progress<ApplicationStatus>());
                 
-                var tempDir = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) 
-                    && Directory.Exists("/dev/shm") ? "/dev/shm" : Path.GetTempPath();
+                var tempDir = PlatformPaths.IsLinux && Directory.Exists("/dev/shm")
+                    ? "/dev/shm" : Path.GetTempPath();
                 var tempImage = Path.Combine(tempDir, $"pa_live_{Guid.NewGuid()}.jpg");
                 await System.IO.File.WriteAllBytesAsync(tempImage, _state.LatestImageData!, token);
 
@@ -181,7 +180,7 @@ public class PolarAlignmentController : ControllerBase
                     };
 
                     lock (SyncRoot) { _latestLiveUpdate = liveUpdate; }
-                    await _hub.Clients.All.SendAsync("PolarAlignmentLiveUpdate", liveUpdate, token);
+                    _eventBus.Broadcast("PolarAlignmentLiveUpdate", liveUpdate);
                 }
             }
         }
@@ -190,13 +189,13 @@ public class PolarAlignmentController : ControllerBase
             // Abort
             lock (SyncRoot) { _running = false; _completed = false; }
             await BroadcastStatusAsync();
-            await _hub.Clients.All.SendAsync("PolarAlignmentError", $"Routine failed or was aborted: {ex.Message}", token);
+            _eventBus.Broadcast("PolarAlignmentError", $"Routine failed or was aborted: {ex.Message}");
         }
     }
 
-    private async Task BroadcastStatusAsync()
+    private Task BroadcastStatusAsync()
     {
-        await _hub.Clients.All.SendAsync("PolarAlignmentStatus", new
+        _eventBus.Broadcast("PolarAlignmentStatus", new
         {
             running = _running,
             step = _step,
@@ -204,6 +203,7 @@ public class PolarAlignmentController : ControllerBase
             completed = _completed,
             baseError = _baseError
         });
+        return Task.CompletedTask;
     }
 
     [HttpGet("liveupdate")]

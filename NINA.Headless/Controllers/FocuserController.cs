@@ -1,11 +1,10 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.SignalR;
 using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Core.Model.Equipment;
 using NINA.Headless.Models;
-using NINA.Headless.Hubs;
 using NINA.Headless.Services;
+using NINA.Headless.Services.Remote;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,15 +22,48 @@ public class FocuserController : ControllerBase
 
     private readonly IFocuserMediator _focuser;
     private readonly NinaStateService _state;
-    private readonly IHubContext<NinaHub> _hub;
+    private readonly RemoteEventBus _eventBus;
     private readonly OneShotAiService _aiService;
+    private readonly EquipmentSelectionService _equipment;
+    private readonly IndiDiscoveryService _indi;
+    private readonly AlpacaClient _alpaca;
 
-    public FocuserController(IFocuserMediator focuser, NinaStateService state, IHubContext<NinaHub> hub, OneShotAiService aiService)
+    public FocuserController(IFocuserMediator focuser, NinaStateService state, RemoteEventBus eventBus,
+        OneShotAiService aiService, EquipmentSelectionService equipment, IndiDiscoveryService indi, AlpacaClient alpaca)
     {
         _focuser = focuser;
         _state = state;
-        _hub = hub;
+        _eventBus = eventBus;
         _aiService = aiService;
+        _equipment = equipment;
+        _indi = indi;
+        _alpaca = alpaca;
+    }
+
+    [HttpGet("status")]
+    public IActionResult GetStatus()
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        if (_equipment.IsConnected(DeviceKind.Focuser) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var s = _indi.BuildFocuserStatus(selected.UniqueId);
+            if (s != null) return Ok(s);
+        }
+        return Ok(new { connected = false, name = "Not connected" });
+    }
+
+    [HttpPost("connect")]
+    public Task<IActionResult> Connect([FromBody] ConnectRequest? request) =>
+        IndiDeviceConnectFlow.ConnectAsync(_equipment, _indi, DeviceKind.Focuser, "Focuser", request, HttpContext.RequestAborted, _alpaca);
+
+    [HttpPost("disconnect")]
+    public async Task<IActionResult> Disconnect()
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        if (selected?.Provider == EquipmentProvider.Indi)
+            await _indi.DisconnectDeviceAsync(selected.UniqueId, HttpContext.RequestAborted);
+        _equipment.Disconnect(DeviceKind.Focuser);
+        return Ok(new { success = true, message = "Focuser disconnected" });
     }
 
     [HttpGet("info")]
@@ -55,8 +87,25 @@ public class FocuserController : ControllerBase
     [HttpPost("move")]
     public async Task<IActionResult> Move([FromBody] FocuserMoveRequest request)
     {
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        if (_equipment.IsConnected(DeviceKind.Focuser) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            await _indi.FocuserMoveAsync(selected.UniqueId, request.Position, HttpContext.RequestAborted);
+            return Ok(new { success = true, position = request.Position });
+        }
         var movedTo = await _focuser.MoveFocuser(request.Position, CancellationToken.None);
         return Ok(new { success = true, position = movedTo });
+    }
+
+    [HttpPost("halt")]
+    public async Task<IActionResult> Halt()
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        if (_equipment.IsConnected(DeviceKind.Focuser) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            await _indi.FocuserHaltAsync(selected.UniqueId, HttpContext.RequestAborted);
+        }
+        return Ok(new { success = true, message = "Halted" });
     }
 
     [HttpPost("autofocus/start")]
@@ -151,7 +200,7 @@ public class FocuserController : ControllerBase
         }
         catch (Exception)
         {
-            await _hub.Clients.All.SendAsync("AutofocusError", "Routine failed or aborted");
+            _eventBus.Broadcast("AutofocusError", "Routine failed or aborted");
         }
     }
 
@@ -166,7 +215,7 @@ public class FocuserController : ControllerBase
             optimalPosition = fit != null && fit.Success ? fit.P : (double?)null
         };
 
-        await _hub.Clients.All.SendAsync("AutofocusLiveUpdate", payload);
+        _eventBus.Broadcast("AutofocusLiveUpdate", payload);
     }
 
     [HttpPost("autofocus/stop")]
@@ -205,7 +254,7 @@ public class FocuserController : ControllerBase
     {
         try
         {
-            await _hub.Clients.All.SendAsync("AiAutofocusLiveUpdate", new { running = true, completed = false });
+            _eventBus.Broadcast("AiAutofocusLiveUpdate", new { running = true, completed = false });
 
             // 1. 카메라 연동해서 사진 촬영 (모의 딜레이)
             await Task.Delay(2000, token);
@@ -228,10 +277,10 @@ public class FocuserController : ControllerBase
             }
 
             // 5. 완료 알림
-            await _hub.Clients.All.SendAsync("AiAutofocusLiveUpdate", new { 
-                running = false, 
-                completed = true, 
-                offsetPredicted = offsetDistance, 
+            _eventBus.Broadcast("AiAutofocusLiveUpdate", new {
+                running = false,
+                completed = true,
+                offsetPredicted = offsetDistance,
                 stepsMoved = stepsToMove,
                 finalPosition = info?.Position ?? 0
             });
@@ -239,7 +288,7 @@ public class FocuserController : ControllerBase
         catch (Exception ex)
         {
             Console.WriteLine($"[AiAutofocus] Error: {ex.Message}");
-            await _hub.Clients.All.SendAsync("AutofocusError", "AI Autofocus aborted");
+            _eventBus.Broadcast("AutofocusError", "AI Autofocus aborted");
         }
     }
 }
