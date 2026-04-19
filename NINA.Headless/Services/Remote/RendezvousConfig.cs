@@ -59,10 +59,12 @@ public class RendezvousConfigStore
         catch (Exception ex) { _log.LogWarning(ex, "Failed to save rendezvous config"); }
     }
 
-    /// <summary>Default points at the dev rendezvous server on Azure. Will swap to
-    /// wss://… once we put a domain + TLS in front of it.</summary>
+    /// <summary>Default points at the production rendezvous server on Azure with TLS.
+    /// Domain resolves to the same VM as the plain-text :8080 path so either will
+    /// reach the same coordinator; we just prefer TLS for App Store compliance and
+    /// App Transport Security defaults.</summary>
     private static RendezvousConfig Default() =>
-        new("ws://20.200.168.43:8080", GenerateMachineId(), Enabled: true);
+        new("wss://astellar.koreasouth.cloudapp.azure.com", GenerateMachineId(), Enabled: true);
 
     /// <summary>obs-{hex8} — 32 bits of randomness. Collision-unlikely across
     /// any realistic observatory fleet; readable in logs and QR codes.</summary>
