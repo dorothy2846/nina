@@ -76,11 +76,16 @@ public class RemoteController : ControllerBase
             });
         }
 
-        if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.PublicKey))
-            return BadRequest(new { error = "invalid_request" });
+        if (string.IsNullOrWhiteSpace(req.DeviceId))
+            return BadRequest(new { error = "invalid_request", message = "deviceId 필수" });
 
+        // v1b accepts an empty PublicKey: the iOS client doesn't yet generate a
+        // Curve25519 keypair — bearer-token auth on the signaling channel is
+        // enough to lock down who can control the observatory. When v2 adds
+        // challenge-response over the DataChannel we'll tighten this to require
+        // a real pubkey.
         var ip = HttpContext.Connection.RemoteIpAddress?.ToString();
-        var (token, deviceId) = _paired.Pair(req.DeviceId, req.Nickname ?? "iPhone", req.PublicKey, ip);
+        var (token, deviceId) = _paired.Pair(req.DeviceId, req.Nickname ?? "iPhone", req.PublicKey ?? "", ip);
 
         return CreatedAtAction(nameof(GetConfig), new
         {

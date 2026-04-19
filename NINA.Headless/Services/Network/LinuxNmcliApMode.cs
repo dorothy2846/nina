@@ -81,11 +81,15 @@ public class LinuxNmcliApMode : IApModeProvider
 
         var ssid = EscapeArg(config.Ssid);
         var pwd = EscapeArg(config.Password);
+        // Pin the subnet to 192.168.4.1/24 — matches the iOS gateway-probe
+        // fallback, the ASIAIR convention users may already know, and keeps
+        // the deployment deterministic instead of inheriting NetworkManager's
+        // 10.42.0.1 default that differs across distros.
         var add = await RunAsync("nmcli",
             $"con add type wifi ifname {iface} con-name {ProfileName} " +
             $"autoconnect yes ssid {ssid} " +
             $"802-11-wireless.mode ap 802-11-wireless.band bg " +
-            $"ipv4.method shared " +
+            $"ipv4.method shared ipv4.addresses 192.168.4.1/24 " +
             $"wifi-sec.key-mgmt wpa-psk wifi-sec.psk {pwd}", ct);
         if (add.ExitCode != 0)
         {
