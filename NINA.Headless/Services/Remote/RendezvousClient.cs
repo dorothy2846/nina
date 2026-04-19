@@ -24,20 +24,23 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
 {
     private readonly RendezvousConfigStore _store;
     private readonly RemoteEventBus _eventBus;
+    private readonly PairedDeviceStore _paired;
     private readonly ILogger<RendezvousClient> _log;
     private readonly HttpClient _loopback;
 
     private ClientWebSocket? _ws;
     private RTCPeerConnection? _peer;
     private RTCDataChannel? _activeChannel;
+    private PairedDevice? _authenticatedDevice;
     private List<RTCIceServer> _iceServers = new() { new RTCIceServer { urls = "stun:stun.l.google.com:19302" } };
     private readonly List<RTCIceCandidateInit> _pendingIce = new();
     private readonly object _peerLock = new();
 
-    public RendezvousClient(RendezvousConfigStore store, RemoteEventBus eventBus, ILogger<RendezvousClient> log)
+    public RendezvousClient(RendezvousConfigStore store, RemoteEventBus eventBus, PairedDeviceStore paired, ILogger<RendezvousClient> log)
     {
         _store = store;
         _eventBus = eventBus;
+        _paired = paired;
         _log = log;
         _loopback = new HttpClient
         {
@@ -134,7 +137,20 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
                 if (root.TryGetProperty("payload", out var cfgPayload))
                     _iceServers = ParseIceServers(cfgPayload);
                 break;
+            case "hello":
+                // Controller MUST authenticate before we'll accept an offer —
+                // rejecting here keeps an unauthenticated caller from ever
+                // triggering the WebRTC stack. We echo back success so the iPhone
+                // knows it can proceed; unknown tokens get an error + silence.
+                HandleHello(root);
+                break;
             case "offer":
+                if (_authenticatedDevice == null)
+                {
+                    _log.LogWarning("rejecting offer from unauthenticated peer");
+                    await SendServerAsync(new { type = "error", error = "unauthenticated" });
+                    return;
+                }
                 if (root.TryGetProperty("payload", out var offerP))
                     await HandleOfferAsync(offerP);
                 break;
@@ -258,6 +274,28 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
             }
             _pendingIce.Clear();
         }
+    }
+
+    private void HandleHello(JsonElement root)
+    {
+        var token = root.TryGetProperty("token", out var t) ? t.GetString() : null;
+        var deviceId = root.TryGetProperty("deviceId", out var d) ? d.GetString() : null;
+        if (string.IsNullOrEmpty(token))
+        {
+            _log.LogWarning("hello without token");
+            _ = SendServerAsync(new { type = "error", error = "missing_token" });
+            return;
+        }
+        var device = _paired.Verify(token);
+        if (device == null)
+        {
+            _log.LogWarning("hello with invalid token from {DeviceId}", deviceId);
+            _ = SendServerAsync(new { type = "error", error = "invalid_token" });
+            return;
+        }
+        _authenticatedDevice = device;
+        _log.LogInformation("hello authenticated: device={DeviceId} ({Nickname})", device.Id, device.Nickname);
+        _ = SendServerAsync(new { type = "hello-ack", nickname = device.Nickname });
     }
 
     private void HandleIce(JsonElement payload)
@@ -432,6 +470,9 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
                 _peer = null;
             }
             _pendingIce.Clear();
+            // Auth is per-WS-session — new connection must re-send hello with
+            // a still-valid token, even if it's the same physical iPhone.
+            _authenticatedDevice = null;
         }
         if (_ws != null)
         {

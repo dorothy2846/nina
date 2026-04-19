@@ -61,6 +61,8 @@ builder.Services.AddHostedService<NINA.Headless.Services.Network.WifiFallbackOrc
 
 // Remote access via rendezvous + WebRTC DataChannel. Observatory registers itself with
 // our Azure signaling server on boot; iOS app (controller) dials in by machineId.
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.ObservatoryIdentity>();
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.PairedDeviceStore>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousConfigStore>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RemoteEventBus>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousClient>();
