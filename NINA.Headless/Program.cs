@@ -41,19 +41,14 @@ builder.Services.AddSingleton<OneShotAiService>();
 builder.Services.AddSingleton<SequencerService>();
 builder.Services.AddSingleton<EquipmentSelectionService>();
 builder.Services.AddSingleton<CameraSelectionService>();
-// Windows-only PHD2 adapter (registry prefs + ShowWindow hide).
-if (NINA.Headless.Services.PlatformPaths.IsWindows)
-    builder.Services.AddSingleton<NINA.Headless.Services.Platform.WindowsPhd2Support>();
 builder.Services.AddSingleton<AlpacaClient>();
 builder.Services.AddSingleton<AutoCalibrationOrchestrator>();
 
-// AP-mode provider selection — one impl per platform, Linux uses nmcli, Windows uses
-// Mobile Hotspot via PowerShell/WinRT, macOS returns unsupported. WifiFallbackOrchestrator
-// then auto-enters AP mode on boot when no home WiFi is reachable (ASIAIR UX).
+// AP-mode provider selection — Linux (production) uses nmcli, macOS (dev only)
+// returns unsupported. Windows production support was removed; the dev loop
+// runs on macOS and real deployments are Linux USB appliances.
 if (NINA.Headless.Services.PlatformPaths.IsLinux)
     builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.LinuxNmcliApMode>();
-else if (NINA.Headless.Services.PlatformPaths.IsWindows)
-    builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.WindowsMobileHotspotApMode>();
 else
     builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.MacOsUnsupportedApMode>();
 builder.Services.AddSingleton<NINA.Headless.Services.Network.ApModeConfigStore>();
@@ -67,13 +62,7 @@ builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousConfigStor
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RemoteEventBus>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousClient>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.Remote.RendezvousClient>());
-// Factory resolves the optional Windows adapter — on macOS/Linux the parameter is null
-// and Phd2Service takes its native path. Avoids leaking IServiceProvider into the service.
-builder.Services.AddSingleton(sp => new Phd2Service(
-    sp.GetRequiredService<ILogger<Phd2Service>>(),
-    NINA.Headless.Services.PlatformPaths.IsWindows
-        ? sp.GetService<NINA.Headless.Services.Platform.WindowsPhd2Support>()
-        : null));
+builder.Services.AddSingleton<Phd2Service>();
 builder.Services.AddSingleton<IndiServerManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiServerManager>());
 builder.Services.AddSingleton<IndiDiscoveryService>();

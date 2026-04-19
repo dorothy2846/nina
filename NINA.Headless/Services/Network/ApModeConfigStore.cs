@@ -13,10 +13,7 @@ public class ApModeConfigStore
     public ApModeConfigStore(ILogger<ApModeConfigStore> log)
     {
         _log = log;
-        var baseDir = PlatformPaths.IsWindows
-            ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
-        var dir = Path.Combine(baseDir, "nina-headless");
+        var dir = PlatformPaths.ConfigDir;
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "ap.json");
     }

@@ -61,12 +61,14 @@ public class MdnsBroadcastService : IHostedService
                 return Task.CompletedTask;
             }
 
-            if (PlatformPaths.IsMacOS || PlatformPaths.IsWindows)
+            if (PlatformPaths.IsMacOS)
             {
+                // Dev box: dns-sd ships with macOS.
                 StartDnsSd();
             }
             else if (PlatformPaths.IsLinux)
             {
+                // Production USB image: avahi-daemon + avahi-publish.
                 StartAvahiPublish();
             }
 

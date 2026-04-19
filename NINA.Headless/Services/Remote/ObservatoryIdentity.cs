@@ -31,10 +31,7 @@ public class ObservatoryIdentity
     public ObservatoryIdentity(ILogger<ObservatoryIdentity> log)
     {
         _log = log;
-        var baseDir = PlatformPaths.IsWindows
-            ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
-        _dir = Path.Combine(baseDir, "nina-headless", "identity");
+        _dir = Path.Combine(PlatformPaths.ConfigDir, "identity");
         Directory.CreateDirectory(_dir);
         LoadOrGenerate();
     }
@@ -128,7 +125,6 @@ public class ObservatoryIdentity
 
     private static void TryChmod600(string path)
     {
-        if (OperatingSystem.IsWindows()) return;
         try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); } catch { }
     }
 }

@@ -46,10 +46,7 @@ public class PairedDeviceStore
     {
         _log = log;
         _ap = ap;
-        var baseDir = PlatformPaths.IsWindows
-            ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
-        var dir = Path.Combine(baseDir, "nina-headless");
+        var dir = PlatformPaths.ConfigDir;
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "paired_devices.json");
         _data = Load();

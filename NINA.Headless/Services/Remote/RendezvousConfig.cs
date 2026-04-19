@@ -20,10 +20,7 @@ public class RendezvousConfigStore
     {
         _log = log;
         _identity = identity;
-        var baseDir = PlatformPaths.IsWindows
-            ? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)
-            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
-        var dir = Path.Combine(baseDir, "nina-headless");
+        var dir = PlatformPaths.ConfigDir;
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "rendezvous.json");
     }
