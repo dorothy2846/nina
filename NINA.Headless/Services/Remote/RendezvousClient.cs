@@ -189,9 +189,23 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
         pc.onicecandidate += async (cand) =>
         {
             if (cand == null) return;
+            // SIPSorcery's ToString() emits the SDP attribute form ("a=candidate:..."),
+            // but browsers / Google WebRTC iOS expect the value-only form without "a=".
+            // Leaving the prefix on is what was causing "addIceCandidate: Expected
+            // candidate got" across Safari + the native iOS client — the entire ICE
+            // negotiation fails because no remote candidate is acceptable.
+            var candStr = cand.ToString() ?? string.Empty;
+            // Normalise to the WebRTC addIceCandidate wire form. SIPSorcery's ToString
+            // omits the "candidate:" prefix (emits only "<foundation> <component> ...")
+            // while Safari/Chrome/iOS all demand it — without this the browser throws
+            // "addIceCandidate: Expected candidate got" and ICE fails.
+            if (candStr.StartsWith("a=candidate:")) candStr = candStr[2..];
+            else if (!candStr.StartsWith("candidate:")) candStr = "candidate:" + candStr;
+            candStr = candStr.TrimEnd('\r', '\n');
+            if (candStr == "candidate:" || string.IsNullOrEmpty(candStr)) return;
             var payload = new
             {
-                candidate = cand.ToString(),
+                candidate = candStr,
                 sdpMid = cand.sdpMid,
                 sdpMLineIndex = cand.sdpMLineIndex
             };
