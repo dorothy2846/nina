@@ -21,13 +21,26 @@ namespace NINA.Headless.Services;
 public class MdnsBroadcastService : IHostedService
 {
     // Unified brand across protocol surfaces — the same "astellar" string shows
-    // up in mDNS service name, TXT app key, machineId prefix and rendezvous URL
-    // so the user sees one consistent name instead of nina-air / beyond-stellar /
-    // astellar colliding. Legacy "nina-air" values stay readable on the iOS side
-    // for backward compatibility during transition.
-    private const string ServiceName = "astellar";
+    // up in mDNS service name, TXT app key, machineId prefix and rendezvous URL.
+    // The service instance name is "astellar-{hostname}" so iOS clients can
+    // strip the "astellar-" prefix and derive the real .local hostname without
+    // needing the TXT record (which NWBrowser frequently delivers empty).
+    private static readonly string ServiceName = $"astellar-{SanitizeHostname(Environment.MachineName)}";
     private const string ServiceType = "_http._tcp";
     private const int Port = 1888;
+
+    private static string SanitizeHostname(string raw)
+    {
+        // Match the mDNS .local hostname Mac's mdnsd / Linux avahi-daemon publish:
+        // lowercase, spaces collapse to hyphens, other unsafe chars stripped.
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in raw.ToLowerInvariant())
+        {
+            if (char.IsLetterOrDigit(c) || c == '-') sb.Append(c);
+            else if (c == ' ' || c == '_') sb.Append('-');
+        }
+        return sb.ToString();
+    }
 
     private readonly ILogger<MdnsBroadcastService> _logger;
     private Process? _mdnsProcess;
