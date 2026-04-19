@@ -44,15 +44,20 @@ builder.Services.AddSingleton<CameraSelectionService>();
 builder.Services.AddSingleton<AlpacaClient>();
 builder.Services.AddSingleton<AutoCalibrationOrchestrator>();
 
-// AP-mode provider selection — Linux (production) uses nmcli, macOS (dev only)
-// returns unsupported. Windows production support was removed; the dev loop
-// runs on macOS and real deployments are Linux USB appliances.
+// AP-mode provider selection — Linux (production) uses nmcli; macOS (dev only)
+// returns an unsupported stub. WifiFallbackOrchestrator then auto-enters AP mode
+// on boot when no home WiFi is reachable (ASIAIR UX).
 if (NINA.Headless.Services.PlatformPaths.IsLinux)
     builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.LinuxNmcliApMode>();
 else
     builder.Services.AddSingleton<NINA.Headless.Services.Network.IApModeProvider, NINA.Headless.Services.Network.MacOsUnsupportedApMode>();
 builder.Services.AddSingleton<NINA.Headless.Services.Network.ApModeConfigStore>();
+builder.Services.AddSingleton<NINA.Headless.Services.Network.ApModeChangeService>();
 builder.Services.AddHostedService<NINA.Headless.Services.Network.WifiFallbackOrchestrator>();
+// Hardware-free factory reset — 3× rapid power-cycle wipes AP config + paired devices.
+// Must register before anything that could cause the service to not reach 60 s of
+// uptime on boot (the "stable uptime" signal the counter checks for).
+builder.Services.AddHostedService<NINA.Headless.Services.Network.BootCounterService>();
 
 // Remote access via rendezvous + WebRTC DataChannel. Observatory registers itself with
 // our Azure signaling server on boot; iOS app (controller) dials in by machineId.

@@ -9,14 +9,11 @@ using System.Threading.Tasks;
 namespace NINA.Headless.Services;
 
 /// <summary>
-/// Cross-platform mDNS/Bonjour broadcast so clients (iOS app, Touch'N'Stars)
-/// can auto-discover this NINA Air instance on the local network.
+/// mDNS/Bonjour broadcast so clients (iOS app, Touch'N'Stars) can auto-discover
+/// this astellar instance on the local network.
 ///
-/// - macOS: uses the dns-sd CLI (part of the OS, no dependencies).
-/// - Linux: relies on avahi-daemon (already set up for nina-pi deployment).
-///   This service attempts avahi-publish but falls back to a hint log.
-/// - Windows: uses dns-sd if Bonjour Print Services is installed; otherwise
-///   skipped (user can connect by static IP).
+/// - Linux (production): relies on avahi-daemon; shells out to avahi-publish.
+/// - macOS (dev): uses the dns-sd CLI shipped with the OS.
 /// </summary>
 public class MdnsBroadcastService : IHostedService
 {
@@ -104,7 +101,6 @@ public class MdnsBroadcastService : IHostedService
 
     private void StartDnsSd()
     {
-        // dns-sd is shipped with macOS; on Windows it requires Bonjour Print Services.
         var psi = new ProcessStartInfo
         {
             FileName = "dns-sd",

@@ -9,11 +9,13 @@ public class NetworkController : ControllerBase
 {
     private readonly IApModeProvider _ap;
     private readonly ApModeConfigStore _store;
+    private readonly ApModeChangeService _change;
 
-    public NetworkController(IApModeProvider ap, ApModeConfigStore store)
+    public NetworkController(IApModeProvider ap, ApModeConfigStore store, ApModeChangeService change)
     {
         _ap = ap;
         _store = store;
+        _change = change;
     }
 
     /// <summary>Capability probe + current status — iOS uses this to decide whether to
@@ -44,8 +46,13 @@ public class NetworkController : ControllerBase
 
     public record ApConfigRequest(string? Ssid, string? Password, bool? AutoFallback);
 
+    /// <summary>Update SSID / password / auto-fallback. If the AP is currently broadcasting
+    /// and the SSID or password changed, the new config is applied atomically with
+    /// verify-and-rollback via <see cref="ApModeChangeService"/> — a failed apply leaves
+    /// the previous broadcasting config intact so the caller's device doesn't get
+    /// stranded. Auto-fallback-only changes skip the apply (doesn't affect live AP).</summary>
     [HttpPost("ap/config")]
-    public IActionResult SaveApConfig([FromBody] ApConfigRequest req)
+    public async Task<IActionResult> SaveApConfig([FromBody] ApConfigRequest req)
     {
         var current = _store.Load();
         var ssid = string.IsNullOrWhiteSpace(req.Ssid) ? current.Ssid : req.Ssid!.Trim();
@@ -57,25 +64,52 @@ public class NetworkController : ControllerBase
         if (ssid.Length == 0 || ssid.Length > 32)
             return BadRequest(new { success = false, message = "SSID는 1자 이상 32자 이하여야 합니다." });
 
-        var cfg = current with
+        var next = current with
         {
             Ssid = ssid,
             Password = password,
             AutoFallback = req.AutoFallback ?? current.AutoFallback
         };
-        _store.Save(cfg);
-        return Ok(new { success = true });
+
+        var ssidOrPasswordChanged = next.Ssid != current.Ssid || next.Password != current.Password;
+        var status = await _ap.GetStatusAsync(HttpContext.RequestAborted);
+        if (ssidOrPasswordChanged && status.Active)
+        {
+            var result = await _change.ChangeAsync(next, HttpContext.RequestAborted);
+            if (!result.Success)
+            {
+                return StatusCode(503, new {
+                    success = false,
+                    message = $"AP 적용 실패 ({result.ErrorReason}). 이전 설정으로 복원되었습니다.",
+                    rolledBack = result.RolledBack,
+                    appliedConfig = new { ssid = result.AppliedConfig.Ssid }
+                });
+            }
+            return Ok(new { success = true, applied = true });
+        }
+
+        _store.Save(next);
+        return Ok(new { success = true, applied = false });
     }
 
-    /// <summary>Enter AP mode immediately. Caller is warned that their current connection
-    /// may drop — if the server's LAN connectivity was via the same WiFi adapter, this
-    /// call's response may fail to reach the client.</summary>
+    /// <summary>Enter AP mode immediately. Goes through the change service so a misbehaving
+    /// adapter / bad persisted config surfaces as a verify_timeout rather than silently
+    /// leaving the AP down. Caller is warned that their current LAN connection may drop
+    /// if the server's LAN connectivity was via the same WiFi adapter.</summary>
     [HttpPost("ap/enable")]
     public async Task<IActionResult> EnableAp()
     {
         var cfg = _store.Load();
-        var ok = await _ap.EnableAsync(cfg, HttpContext.RequestAborted);
-        return Ok(new { success = ok });
+        var result = await _change.ChangeAsync(cfg, HttpContext.RequestAborted);
+        if (!result.Success)
+        {
+            return StatusCode(503, new {
+                success = false,
+                message = $"AP 시작 실패 ({result.ErrorReason}).",
+                rolledBack = result.RolledBack
+            });
+        }
+        return Ok(new { success = true });
     }
 
     [HttpPost("ap/disable")]

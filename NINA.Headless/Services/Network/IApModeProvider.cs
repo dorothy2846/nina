@@ -2,13 +2,13 @@ namespace NINA.Headless.Services.Network;
 
 /// <summary>Platform abstraction for WiFi AP mode — the "field hotspot" pattern where the
 /// server computer becomes its own WiFi network for phones to connect to on site.
-/// Linux uses NetworkManager/nmcli, Windows uses Mobile Hotspot (WinRT via PowerShell),
-/// macOS is unsupported (Apple removed programmatic control in macOS 11+).</summary>
+/// Linux (production) uses NetworkManager/nmcli; macOS (dev) returns an unsupported stub
+/// because Apple removed programmatic control in macOS 11+.</summary>
 public interface IApModeProvider
 {
     /// <summary>Can this machine host an AP at all? Checks adapter support, required
-    /// binaries (nmcli / powershell), permissions. Called once at startup and whenever
-    /// the user visits the AP settings screen.</summary>
+    /// binaries (nmcli), permissions. Called once at startup and whenever the user
+    /// visits the AP settings screen.</summary>
     Task<ApCapabilities> GetCapabilitiesAsync(CancellationToken ct);
 
     Task<ApModeStatus> GetStatusAsync(CancellationToken ct);
@@ -19,8 +19,8 @@ public interface IApModeProvider
     /// connection may already be gone.</summary>
     Task<bool> EnableAsync(ApModeConfig config, CancellationToken ct);
 
-    /// <summary>Stop AP mode and return adapter to client mode. NetworkManager / Windows
-    /// will attempt to reconnect to the saved home WiFi automatically.</summary>
+    /// <summary>Stop AP mode and return adapter to client mode. NetworkManager will
+    /// attempt to reconnect to the saved home WiFi automatically.</summary>
     Task<bool> DisableAsync(CancellationToken ct);
 }
 
@@ -40,10 +40,9 @@ public record ApModeStatus(
     /// adapter disappeared, etc.) this carries the short error.
     string? LastError);
 
-/// <summary>Persisted AP configuration. Lives in $XDG_CONFIG_HOME/nina-headless/ap.json
-/// (Linux) / %APPDATA%\NinaHeadless\ap.json (Windows). SSID and password are user-set;
-/// AutoFallback controls whether WifiFallbackOrchestrator flips into AP mode after a
-/// failed-to-connect-to-home-WiFi grace period.
+/// <summary>Persisted AP configuration. Lives in <c>PlatformPaths.ConfigDir/ap.json</c>.
+/// SSID and password are user-set; AutoFallback controls whether WifiFallbackOrchestrator
+/// flips into AP mode after a failed-to-connect-to-home-WiFi grace period.
 ///
 /// Mode is the operator-declared intent:
 ///   • Field — on-site use, fallback to AP when home WiFi isn't reachable. Losing the

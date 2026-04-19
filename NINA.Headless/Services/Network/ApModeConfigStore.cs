@@ -42,21 +42,49 @@ public class ApModeConfigStore
         catch (Exception ex) { _log.LogWarning(ex, "Failed to save AP config"); }
     }
 
-    /// <summary>Default SSID "BeyondStellar-{hostname}" + a random 10-char alphanumeric
-    /// password. Passphrase length matches PHD2-style field-use hotspots and is short
-    /// enough to type into iPhone WiFi settings manually when the QR code flow isn't
-    /// available. Excludes visually ambiguous chars (0/O/1/I/l).</summary>
-    private static ApModeConfig DefaultConfig()
+    /// <summary>Factory defaults: SSID <c>astellar-ap</c>, password <c>astellar</c>.
+    /// Intentionally stable and documented so owners can recover after a factory reset
+    /// (3× power-cycle) without a sticker or recovery sheet. The assumption is that the
+    /// very first boot out of the box is trusted — owner immediately sets their own
+    /// credentials via the API. The default password is 8 chars (WPA2-PSK minimum).</summary>
+    public const string DefaultSsid = "astellar-ap";
+    public const string DefaultPassword = "astellar";
+
+    private static ApModeConfig DefaultConfig() =>
+        new ApModeConfig(DefaultSsid, DefaultPassword, AutoFallback: true);
+
+    /// <summary>Snapshot path for the apply-verify-rollback flow. Written atomically
+    /// before a config change; restored if the new config fails to bring the AP up.</summary>
+    private string PreviousPath => Path.Combine(Path.GetDirectoryName(_path)!, "ap.previous.json");
+
+    public ApModeConfig? LoadPrevious()
     {
-        var host = Environment.MachineName.Replace(' ', '-').ToLowerInvariant();
-        var ssid = $"BeyondStellar-{host}";
-        return new ApModeConfig(ssid, GeneratePassword(), AutoFallback: true);
+        try
+        {
+            if (File.Exists(PreviousPath))
+                return JsonSerializer.Deserialize<ApModeConfig>(File.ReadAllText(PreviousPath));
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Failed to read ap.previous.json"); }
+        return null;
     }
 
-    private static string GeneratePassword()
+    public void SavePrevious(ApModeConfig cfg)
     {
-        const string alphabet = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
-        var rng = new Random();
-        return new string(Enumerable.Range(0, 10).Select(_ => alphabet[rng.Next(alphabet.Length)]).ToArray());
+        try { File.WriteAllText(PreviousPath, JsonSerializer.Serialize(cfg, new JsonSerializerOptions { WriteIndented = true })); }
+        catch (Exception ex) { _log.LogWarning(ex, "Failed to save ap.previous.json"); }
+    }
+
+    public void ClearPrevious()
+    {
+        try { if (File.Exists(PreviousPath)) File.Delete(PreviousPath); } catch { }
+    }
+
+    /// <summary>Factory reset — delete ap.json (and the rollback snapshot). Next Load()
+    /// returns <see cref="DefaultConfig"/>. Called by the 3× power-cycle recovery path.</summary>
+    public void ResetToDefaults()
+    {
+        try { if (File.Exists(_path)) File.Delete(_path); } catch { }
+        ClearPrevious();
+        _log.LogWarning("AP config reset to factory defaults (ssid={Ssid})", DefaultSsid);
     }
 }

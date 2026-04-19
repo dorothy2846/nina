@@ -4,8 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Cross-platform: RuntimeIdentifier specified at publish time, not build time.
-         Supports linux-x64, linux-arm64, osx-x64, osx-arm64, win-x64. -->
+    <!-- RuntimeIdentifier specified at publish time. Production: linux-x64 / linux-arm64
+         (USB appliance). Dev: osx-x64 / osx-arm64. -->
     <SelfContained>false</SelfContained>
     <AssemblyName>NINA.Headless</AssemblyName>
     <RootNamespace>NINA.Headless</RootNamespace>

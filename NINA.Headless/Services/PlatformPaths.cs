@@ -6,10 +6,8 @@ namespace NINA.Headless.Services;
 
 /// <summary>
 /// Path resolution for NINA Headless. Production target is Linux (USB-booted
-/// appliance); macOS stays supported as the developer build/run environment
-/// only, so that macOS branch exists purely to keep the dev inner loop fast.
-/// Windows is not supported — any checks that used to exist there have been
-/// removed and `IsWindows` is no longer a thing callers can ask for.
+/// appliance); macOS is the developer build/run environment. The macOS branches
+/// exist to keep the dev inner loop fast and are not shipped.
 /// </summary>
 public static class PlatformPaths
 {

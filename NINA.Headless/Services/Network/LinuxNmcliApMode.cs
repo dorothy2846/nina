@@ -4,7 +4,7 @@ namespace NINA.Headless.Services.Network;
 
 /// <summary>
 /// Linux AP mode via NetworkManager's <c>nmcli</c>. Creates a reusable connection profile
-/// named <c>beyondstellar-ap</c> with <c>ipv4.method shared</c> — NetworkManager bundles
+/// named <c>astellar-ap</c> with <c>ipv4.method shared</c> — NetworkManager bundles
 /// dnsmasq, so DHCP + DNS on 192.168.4.0/24 come for free. Clients connect to the SSID,
 /// get an IP, reach the server at 192.168.4.1:1888.
 ///
@@ -14,7 +14,7 @@ namespace NINA.Headless.Services.Network;
 /// </summary>
 public class LinuxNmcliApMode : IApModeProvider
 {
-    private const string ProfileName = "beyondstellar-ap";
+    private const string ProfileName = "astellar-ap";
 
     private readonly ILogger<LinuxNmcliApMode> _log;
     public LinuxNmcliApMode(ILogger<LinuxNmcliApMode> log) { _log = log; }
