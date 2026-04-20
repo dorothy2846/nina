@@ -1,0 +1,86 @@
+<defSwitchVector device="Waveshare Relay" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Waveshare Relay" name="DRIVER_INFO" label="Driver Info" group="Connection" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:35:29">
+    <defText name="DRIVER_NAME" label="Name">
+Waveshare Relay
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_wavesharemodbus_relay
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.0
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+98304
+    </defText>
+</defTextVector>
+<defSwitchVector device="Waveshare Relay" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Waveshare Relay" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Waveshare Relay" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Waveshare Relay" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:35:29">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+2000
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Waveshare Relay" name="CONNECTION_MODE" label="Connection Mode" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="CONNECTION_TCP" label="Network">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Waveshare Relay" name="DEVICE_ADDRESS" label="Server" group="Connection" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:29">
+    <defText name="ADDRESS" label="Address">
+192.168.1.1
+    </defText>
+    <defText name="PORT" label="Port">
+502
+    </defText>
+</defTextVector>
+<defSwitchVector device="Waveshare Relay" name="CONNECTION_TYPE" label="Connection Type" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="TCP" label="TCP">
+On
+    </defSwitch>
+    <defSwitch name="UDP" label="UDP">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Waveshare Relay" name="DEVICE_LAN_SEARCH" label="LAN Search" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:29">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+Off
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+On
+    </defSwitch>
+</defSwitchVector>

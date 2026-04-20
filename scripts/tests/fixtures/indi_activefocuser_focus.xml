@@ -1,0 +1,49 @@
+<defSwitchVector device="ActiveFocuser" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:29:03">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="ActiveFocuser" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:29:03">
+    <defText name="DRIVER_NAME" label="Name">
+ActiveFocuser
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_activefocuser_focus
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.0
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+8
+    </defText>
+</defTextVector>
+<defSwitchVector device="ActiveFocuser" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:29:03">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="ActiveFocuser" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:29:03">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+750
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="ActiveFocuser" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:29:03">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>

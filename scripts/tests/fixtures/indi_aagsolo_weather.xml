@@ -1,0 +1,60 @@
+<defSwitchVector device="AAG Solo Cloudwatcher" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:29:01">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="AAG Solo Cloudwatcher" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:29:01">
+    <defText name="DRIVER_NAME" label="Name">
+AAG Solo Cloudwatcher
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_aagsolo_weather
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+0.1
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+128
+    </defText>
+</defTextVector>
+<defSwitchVector device="AAG Solo Cloudwatcher" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:29:01">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="AAG Solo Cloudwatcher" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:29:01">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="AAG Solo Cloudwatcher" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:29:01">
+    <defText name="ACTIVE_GPS" label="GPS">
+GPS Simulator
+    </defText>
+</defTextVector>
+<defTextVector device="AAG Solo Cloudwatcher" name="SOLO_HOST" label="Solo" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:29:01">
+    <defText name="HOSTNAME" label="HOSTNAME"/>
+</defTextVector>
+<defTextVector device="AAG Solo Cloudwatcher" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:29:01">
+    <defText name="ACTIVE_GPS" label="GPS">
+GPS Simulator
+    </defText>
+</defTextVector>
+<defTextVector device="AAG Solo Cloudwatcher" name="SOLO_HOST" label="Solo" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:29:01">
+    <defText name="HOSTNAME" label="HOSTNAME"/>
+</defTextVector>

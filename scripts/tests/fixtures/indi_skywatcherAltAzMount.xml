@@ -1,0 +1,223 @@
+<defSwitchVector device="Skywatcher Alt-Az" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Skywatcher Alt-Az" name="DRIVER_INFO" label="Driver Info" group="Connection" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defText name="DRIVER_NAME" label="Name">
+Skywatcher Alt-Az
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_skywatcherAltAzMount
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.8
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+5
+    </defText>
+</defTextVector>
+<defNumberVector device="Skywatcher Alt-Az" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:34:03">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+1000
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Skywatcher Alt-Az" name="ALIGNMENT_POINT_MANDATORY_NUMBERS" label="Mandatory sync point numeric fields" group="Alignment" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defNumber name="ALIGNMENT_POINT_ENTRY_OBSERVATION_JULIAN_DATE" label="Observation Julian date" format="%g" min="0" max="60000" step="0">
+0
+    </defNumber>
+    <defNumber name="ALIGNMENT_POINT_ENTRY_RA" label="Right Ascension (hh:mm:ss)" format="%010.6m" min="0" max="24" step="0">
+0
+    </defNumber>
+    <defNumber name="ALIGNMENT_POINT_ENTRY_DEC" label="Declination (dd:mm:ss)" format="%010.6m" min="-90" max="90" step="0">
+0
+    </defNumber>
+    <defNumber name="ALIGNMENT_POINT_ENTRY_VECTOR_X" label="Telescope direction vector x" format="%g" min="-3.4028234663852885981e+38" max="3.4028234663852885981e+38" step="0">
+0
+    </defNumber>
+    <defNumber name="ALIGNMENT_POINT_ENTRY_VECTOR_Y" label="Telescope direction vector y" format="%g" min="-3.4028234663852885981e+38" max="3.4028234663852885981e+38" step="0">
+0
+    </defNumber>
+    <defNumber name="ALIGNMENT_POINT_ENTRY_VECTOR_Z" label="Telescope direction vector z" format="%g" min="-3.4028234663852885981e+38" max="3.4028234663852885981e+38" step="0">
+0
+    </defNumber>
+</defNumberVector>
+<defBLOBVector device="Skywatcher Alt-Az" name="ALIGNMENT_POINT_OPTIONAL_BINARY_BLOB" label="Optional sync point binary data" group="Alignment" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defBLOB name="ALIGNMENT_POINT_ENTRY_PRIVATE" label="Private binary data"/>
+</defBLOBVector>
+<defNumberVector device="Skywatcher Alt-Az" name="ALIGNMENT_POINTSET_SIZE" label="Current Set" group="Alignment" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defNumber name="ALIGNMENT_POINTSET_SIZE" label="Size" format="%g" min="0" max="100000" step="0">
+0
+    </defNumber>
+</defNumberVector>
+<defNumberVector device="Skywatcher Alt-Az" name="ALIGNMENT_POINTSET_CURRENT_ENTRY" label="Current Set" group="Alignment" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defNumber name="ALIGNMENT_POINTSET_CURRENT_ENTRY" label="Pointer" format="%g" min="0" max="100000" step="0">
+0
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="ALIGNMENT_POINTSET_ACTION" label="Action to take" group="Alignment" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="APPEND" label="Add entries at end of set">
+On
+    </defSwitch>
+    <defSwitch name="INSERT" label="Insert entries at current index">
+Off
+    </defSwitch>
+    <defSwitch name="EDIT" label="Overwrite entry at current index">
+Off
+    </defSwitch>
+    <defSwitch name="DELETE" label="Delete entry at current index">
+Off
+    </defSwitch>
+    <defSwitch name="CLEAR" label="Delete all the entries in the set">
+Off
+    </defSwitch>
+    <defSwitch name="READ" label="Read the entry at the current pointer">
+Off
+    </defSwitch>
+    <defSwitch name="READ INCREMENT" label="Increment the pointer before reading the entry">
+Off
+    </defSwitch>
+    <defSwitch name="LOAD DATABASE" label="Load the alignment database from local storage">
+Off
+    </defSwitch>
+    <defSwitch name="SAVE DATABASE" label="Save the alignment database to local storage">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="ALIGNMENT_POINTSET_COMMIT" label="Execute the action" group="Alignment" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="ALIGNMENT_POINTSET_COMMIT" label="OK">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="ALIGNMENT_SUBSYSTEM_MATH_PLUGINS" label="Math Plugins" group="Alignment" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="INBUILT_MATH_PLUGIN" label="Inbuilt Math Plugin">
+Off
+    </defSwitch>
+    <defSwitch name="SVD Math Plugin" label="SVD Math Plugin">
+Off
+    </defSwitch>
+    <defSwitch name="Nearest Math Plugin" label="Nearest Math Plugin">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE" label="(Re)Initialise Plugin" group="Alignment" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="ALIGNMENT_SUBSYSTEM_MATH_PLUGIN_INITIALISE" label="OK">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="ALIGNMENT_SUBSYSTEM_ACTIVE" label="Activate alignment subsystem" group="Alignment" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="ALIGNMENT SUBSYSTEM ACTIVE" label="Alignment Subsystem Active">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="CONNECTION_MODE" label="Connection Mode" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="CONNECTION_SERIAL" label="Serial">
+On
+    </defSwitch>
+    <defSwitch name="CONNECTION_TCP" label="Network">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="SYSTEM_PORTS" label="System Ports" group="Connection" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="cu.debug-console" label="cu.debug-console">
+Off
+    </defSwitch>
+    <defSwitch name="cu.Bluetooth-Incoming-Port" label="cu.Bluetooth-Incoming-Port">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Skywatcher Alt-Az" name="DEVICE_PORT" label="Ports" group="Connection" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defText name="PORT" label="Port">
+/dev/cu.usbserial
+    </defText>
+</defTextVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="DEVICE_BAUD_RATE" label="Baud Rate" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="9600" label="9600">
+On
+    </defSwitch>
+    <defSwitch name="19200" label="19200">
+Off
+    </defSwitch>
+    <defSwitch name="38400" label="38400">
+Off
+    </defSwitch>
+    <defSwitch name="57600" label="57600">
+Off
+    </defSwitch>
+    <defSwitch name="115200" label="115200">
+Off
+    </defSwitch>
+    <defSwitch name="230400" label="230400">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="DEVICE_AUTO_SEARCH" label="Auto Search" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+On
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="DEVICE_PORT_SCAN" label="Refresh" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="Scan Ports" label="Scan Ports">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Skywatcher Alt-Az" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defText name="ACTIVE_GPS" label="GPS">
+GPS Simulator
+    </defText>
+    <defText name="ACTIVE_DOME" label="DOME">
+Dome Simulator
+    </defText>
+</defTextVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="DOME_POLICY" label="Dome Policy" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="DOME_IGNORED" label="Dome ignored">
+On
+    </defSwitch>
+    <defSwitch name="DOME_LOCKS" label="Dome locks">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Skywatcher Alt-Az" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defText name="ACTIVE_GPS" label="GPS">
+GPS Simulator
+    </defText>
+    <defText name="ACTIVE_DOME" label="DOME">
+Dome Simulator
+    </defText>
+</defTextVector>
+<defSwitchVector device="Skywatcher Alt-Az" name="DOME_POLICY" label="Dome Policy" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:34:03">
+    <defSwitch name="DOME_IGNORED" label="Dome ignored">
+On
+    </defSwitch>
+    <defSwitch name="DOME_LOCKS" label="Dome locks">
+Off
+    </defSwitch>
+</defSwitchVector>

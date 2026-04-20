@@ -1,0 +1,83 @@
+<defSwitchVector device="DragonLIGHT" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="DragonLIGHT" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defText name="DRIVER_NAME" label="Name">
+DragonLIGHT
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_dragon_light
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.0
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+33792
+    </defText>
+</defTextVector>
+<defSwitchVector device="DragonLIGHT" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:30:10">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="DragonLIGHT" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:30:10">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="DragonLIGHT" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:30:10">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="DragonLIGHT" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:30:10">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+1000
+    </defNumber>
+</defNumberVector>
+<defTextVector device="DragonLIGHT" name="IP_ADDRESS" label="IP Address" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defText name="IP Address" label="IP Address"/>
+</defTextVector>
+<defSwitchVector device="DragonLIGHT" name="DISCOVER" label="Discover" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defSwitch name="DISCOVER" label="Discover">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="DragonLIGHT" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defText name="ACTIVE_FILTER" label="Filter">
+Filter Simulator
+    </defText>
+</defTextVector>
+<defTextVector device="DragonLIGHT" name="IP_ADDRESS" label="IP Address" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defText name="IP Address" label="IP Address"/>
+</defTextVector>
+<defSwitchVector device="DragonLIGHT" name="DISCOVER" label="Discover" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defSwitch name="DISCOVER" label="Discover">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="DragonLIGHT" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:10">
+    <defText name="ACTIVE_FILTER" label="Filter">
+Filter Simulator
+    </defText>
+</defTextVector>

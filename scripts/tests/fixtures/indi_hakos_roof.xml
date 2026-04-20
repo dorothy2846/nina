@@ -1,0 +1,128 @@
+<defSwitchVector device="Hakos Roll Off Roof" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Hakos Roll Off Roof" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="DRIVER_NAME" label="Name">
+Hakos Roll Off Roof
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_hakos_roof
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.3
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+32
+    </defText>
+</defTextVector>
+<defSwitchVector device="Hakos Roll Off Roof" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Hakos Roll Off Roof" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Hakos Roll Off Roof" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Hakos Roll Off Roof" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:30:44">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+1000
+    </defNumber>
+</defNumberVector>
+<defTextVector device="Hakos Roll Off Roof" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="ACTIVE_TELESCOPE" label="Telescope">
+Telescope Simulator
+    </defText>
+    <defText name="ACTIVE_INPUT" label="Input"/>
+    <defText name="ACTIVE_OUTPUT" label="Output"/>
+</defTextVector>
+<defSwitchVector device="Hakos Roll Off Roof" name="MOUNT_POLICY" label="Mount Policy" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="MOUNT_IGNORED" label="Mount ignored">
+On
+    </defSwitch>
+    <defSwitch name="MOUNT_LOCKS" label="Mount locks">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Hakos Roll Off Roof" name="DATA_SOURCE" label="Data Source" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="URL" label="URL"/>
+</defTextVector>
+<defTextVector device="Hakos Roll Off Roof" name="ROOF_DATA" label="Roof Data" group="Main Control" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="MSG" label="Last Command"/>
+    <defText name="STAT" label="Stat"/>
+    <defText name="STEXT" label="Status"/>
+    <defText name="POS" label="Position"/>
+    <defText name="REL_POSITION" label="Current Position %"/>
+</defTextVector>
+<defTextVector device="Hakos Roll Off Roof" name="ROOF_TOKEN" label="Roof Token" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="TOKEN" label="Token"/>
+</defTextVector>
+<defNumberVector device="Hakos Roll Off Roof" name="ENCODER_TICKS" label="Max Roof Travel" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defNumber name="ENCODER_TICKS" label="Encoder Ticks" format="%6.0f" min="0" max="100000" step="1">
+0
+    </defNumber>
+</defNumberVector>
+<defTextVector device="Hakos Roll Off Roof" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="ACTIVE_TELESCOPE" label="Telescope">
+Telescope Simulator
+    </defText>
+    <defText name="ACTIVE_INPUT" label="Input"/>
+    <defText name="ACTIVE_OUTPUT" label="Output"/>
+</defTextVector>
+<defSwitchVector device="Hakos Roll Off Roof" name="MOUNT_POLICY" label="Mount Policy" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="MOUNT_IGNORED" label="Mount ignored">
+On
+    </defSwitch>
+    <defSwitch name="MOUNT_LOCKS" label="Mount locks">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Hakos Roll Off Roof" name="DATA_SOURCE" label="Data Source" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="URL" label="URL"/>
+</defTextVector>
+<defTextVector device="Hakos Roll Off Roof" name="ROOF_DATA" label="Roof Data" group="Main Control" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="MSG" label="Last Command"/>
+    <defText name="STAT" label="Stat"/>
+    <defText name="STEXT" label="Status"/>
+    <defText name="POS" label="Position"/>
+    <defText name="REL_POSITION" label="Current Position %"/>
+</defTextVector>
+<defTextVector device="Hakos Roll Off Roof" name="ROOF_TOKEN" label="Roof Token" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defText name="TOKEN" label="Token"/>
+</defTextVector>
+<defNumberVector device="Hakos Roll Off Roof" name="ENCODER_TICKS" label="Max Roof Travel" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defNumber name="ENCODER_TICKS" label="Encoder Ticks" format="%6.0f" min="0" max="100000" step="1">
+0
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Hakos Roll Off Roof" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:30:44">
+    <defSwitch name="SIMULATE" label="Simulate Device">
+Off
+    </defSwitch>
+</defSwitchVector>

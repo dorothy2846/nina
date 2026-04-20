@@ -1,0 +1,137 @@
+<defSwitchVector device="Wake On Lan" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Wake On Lan" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="DRIVER_NAME" label="Name">
+Wake On Lan
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_wake_on_lan
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.0
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+0
+    </defText>
+</defTextVector>
+<defSwitchVector device="Wake On Lan" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Wake On Lan" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:35:01">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+1000
+    </defNumber>
+</defNumberVector>
+<defTextVector device="Wake On Lan" name="DEVICE_1" label="Device 1" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defTextVector device="Wake On Lan" name="DEVICE_2" label="Device 2" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defTextVector device="Wake On Lan" name="DEVICE_3" label="Device 3" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defTextVector device="Wake On Lan" name="DEVICE_4" label="Device 4" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defSwitchVector device="Wake On Lan" name="Device 1" label="Device 1" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="Device 2" label="Device 2" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="Device 3" label="Device 3" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="Device 4" label="Device 4" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Wake On Lan" name="DEVICE_1" label="Device 1" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defTextVector device="Wake On Lan" name="DEVICE_2" label="Device 2" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defTextVector device="Wake On Lan" name="DEVICE_3" label="Device 3" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defTextVector device="Wake On Lan" name="DEVICE_4" label="Device 4" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defText name="MAC" label="MAC Address"/>
+    <defText name="ALIAS" label="Alias"/>
+    <defText name="IP" label="IP Address"/>
+</defTextVector>
+<defSwitchVector device="Wake On Lan" name="Device 1" label="Device 1" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="Device 2" label="Device 2" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="Device 3" label="Device 3" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Wake On Lan" name="Device 4" label="Device 4" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:35:01">
+    <defSwitch name="SEND" label="Send">
+Off
+    </defSwitch>
+</defSwitchVector>

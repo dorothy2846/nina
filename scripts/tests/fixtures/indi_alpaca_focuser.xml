@@ -1,0 +1,84 @@
+<defSwitchVector device="Alpaca Focuser" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:29:13">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Alpaca Focuser" name="DRIVER_INFO" label="Driver Info" group="Connection" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:29:13">
+    <defText name="DRIVER_NAME" label="Name">
+Alpaca Focuser
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_alpaca_focuser
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.0
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+8
+    </defText>
+</defTextVector>
+<defSwitchVector device="Alpaca Focuser" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:29:13">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Alpaca Focuser" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:29:13">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+500
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Alpaca Focuser" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:29:13">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Alpaca Focuser" name="CONNECTION_MODE" label="Connection Mode" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:29:13">
+    <defSwitch name="CONNECTION_SERIAL" label="Serial">
+Off
+    </defSwitch>
+    <defSwitch name="CONNECTION_TCP" label="Network">
+Off
+    </defSwitch>
+    <defSwitch name="CONNECTION_TCP" label="Network">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="" name="DEVICE_ADDRESS" label="Server" group="Connection" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:29:13">
+    <defText name="ADDRESS" label="Address">
+alpaca.local
+    </defText>
+    <defText name="PORT" label="Port">
+32323
+    </defText>
+</defTextVector>
+<defSwitchVector device="" name="CONNECTION_TYPE" label="Connection Type" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:29:13">
+    <defSwitch name="TCP" label="TCP">
+On
+    </defSwitch>
+    <defSwitch name="UDP" label="UDP">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="" name="DEVICE_LAN_SEARCH" label="LAN Search" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:29:13">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+Off
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+On
+    </defSwitch>
+</defSwitchVector>

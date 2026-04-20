@@ -1,0 +1,70 @@
+<defSwitchVector device="Weather Watcher" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Weather Watcher" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="DRIVER_NAME" label="Name">
+Weather Watcher
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_watcher_weather
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+2.1
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+128
+    </defText>
+</defTextVector>
+<defSwitchVector device="Weather Watcher" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:35:27">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Weather Watcher" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:35:27">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Weather Watcher" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="ACTIVE_GPS" label="GPS">
+GPS Simulator
+    </defText>
+</defTextVector>
+<defTextVector device="Weather Watcher" name="WATCH_SOURCE" label="Source" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="URL" label="URL"/>
+</defTextVector>
+<defTextVector device="Weather Watcher" name="SEPARATOR_KEYWORD" label="Separator" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="SEPARATOR" label="Separator">
+=
+    </defText>
+</defTextVector>
+<defTextVector device="Weather Watcher" name="ACTIVE_DEVICES" label="Snoop devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="ACTIVE_GPS" label="GPS">
+GPS Simulator
+    </defText>
+</defTextVector>
+<defTextVector device="Weather Watcher" name="WATCH_SOURCE" label="Source" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="URL" label="URL"/>
+</defTextVector>
+<defTextVector device="Weather Watcher" name="SEPARATOR_KEYWORD" label="Separator" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:27">
+    <defText name="SEPARATOR" label="Separator">
+=
+    </defText>
+</defTextVector>

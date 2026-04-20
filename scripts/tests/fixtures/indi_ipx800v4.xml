@@ -1,0 +1,92 @@
+<defSwitchVector device="IPX800" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="IPX800" name="DRIVER_INFO" label="Driver Info" group="Connection" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defText name="DRIVER_NAME" label="Name">
+IPX800
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_ipx800v4
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.1
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+229376
+    </defText>
+</defTextVector>
+<defSwitchVector device="IPX800" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="IPX800" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="IPX800" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="IPX800" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:31:10">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+1000
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="IPX800" name="CONNECTION_MODE" label="Connection Mode" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="CONNECTION_TCP" label="Network">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="IPX800" name="DEVICE_ADDRESS" label="Server" group="Connection" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defText name="ADDRESS" label="Address">
+192.168.1.100
+    </defText>
+    <defText name="PORT" label="Port">
+80
+    </defText>
+</defTextVector>
+<defSwitchVector device="IPX800" name="CONNECTION_TYPE" label="Connection Type" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="TCP" label="TCP">
+On
+    </defSwitch>
+    <defSwitch name="UDP" label="UDP">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="IPX800" name="DEVICE_LAN_SEARCH" label="LAN Search" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+Off
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="IPX800" name="API_KEY" label="API Settings" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defText name="API_KEY" label="API Key"/>
+</defTextVector>
+<defTextVector device="IPX800" name="API_KEY" label="API Settings" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:31:10">
+    <defText name="API_KEY" label="API Key"/>
+</defTextVector>

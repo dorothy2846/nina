@@ -1,0 +1,158 @@
+<defSwitchVector device="WatchDog" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="WatchDog" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defText name="DRIVER_NAME" label="Name">
+WatchDog
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_watchdog
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+0.4
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+32768
+    </defText>
+</defTextVector>
+<defSwitchVector device="WatchDog" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="WatchDog" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="WatchDog" name="WATCHDOG_HEARTBEAT" label="Heart beat" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defNumber name="WATCHDOG_HEARTBEAT_VALUE" label="Threshold (s)" format="%.f" min="0" max="3600" step="60">
+0
+    </defNumber>
+</defNumberVector>
+<defNumberVector device="WatchDog" name="WATCHDOG_WEATHER" label="Weather" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defNumber name="WATCHDOG_WEATHER_VALUE" label="Threshold (s)" format="%.f" min="0" max="3600" step="60">
+0
+    </defNumber>
+</defNumberVector>
+<defTextVector device="WatchDog" name="WATCHDOG_SETTINGS" label="Settings" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defText name="INDISERVER_HOST" label="indiserver host">
+localhost
+    </defText>
+    <defText name="INDISERVER_PORT" label="indiserver port">
+7624
+    </defText>
+    <defText name="SHUTDOWN_SCRIPT" label="shutdown script"/>
+</defTextVector>
+<defSwitchVector device="WatchDog" name="WATCHDOG_Trigger" label="Trigger" group="Main Control" state="Idle" perm="rw" rule="AnyOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="TRIGGER_CLIENT" label="Client">
+Off
+    </defSwitch>
+    <defSwitch name="TRIGGER_WEATHER" label="Weather">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="WatchDog" name="WATCHDOG_SHUTDOWN" label="Shutdown" group="Main Control" state="Idle" perm="rw" rule="AnyOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="PARK_MOUNT" label="Park Mount">
+Off
+    </defSwitch>
+    <defSwitch name="PARK_DOME" label="Park Dome">
+Off
+    </defSwitch>
+    <defSwitch name="EXECUTE_SCRIPT" label="Execute Script">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="WatchDog" name="WATCHDOG_MOUNT_POLICY" label="Mount Policy" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="MOUNT_IGNORED" label="Mount ignored">
+On
+    </defSwitch>
+    <defSwitch name="MOUNT_LOCKS" label="Mount locks">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="WatchDog" name="ACTIVE_DEVICES" label="Active devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defText name="ACTIVE_TELESCOPE" label="Telescope">
+Telescope Simulator
+    </defText>
+    <defText name="ACTIVE_DOME" label="Dome">
+Dome Simulator
+    </defText>
+    <defText name="ACTIVE_WEATHER" label="Weather">
+Weather Simulator
+    </defText>
+</defTextVector>
+<defNumberVector device="WatchDog" name="WATCHDOG_HEARTBEAT" label="Heart beat" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defNumber name="WATCHDOG_HEARTBEAT_VALUE" label="Threshold (s)" format="%.f" min="0" max="3600" step="60">
+0
+    </defNumber>
+</defNumberVector>
+<defNumberVector device="WatchDog" name="WATCHDOG_WEATHER" label="Weather" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defNumber name="WATCHDOG_WEATHER_VALUE" label="Threshold (s)" format="%.f" min="0" max="3600" step="60">
+0
+    </defNumber>
+</defNumberVector>
+<defTextVector device="WatchDog" name="WATCHDOG_SETTINGS" label="Settings" group="Main Control" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defText name="INDISERVER_HOST" label="indiserver host">
+localhost
+    </defText>
+    <defText name="INDISERVER_PORT" label="indiserver port">
+7624
+    </defText>
+    <defText name="SHUTDOWN_SCRIPT" label="shutdown script"/>
+</defTextVector>
+<defSwitchVector device="WatchDog" name="WATCHDOG_Trigger" label="Trigger" group="Main Control" state="Idle" perm="rw" rule="AnyOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="TRIGGER_CLIENT" label="Client">
+Off
+    </defSwitch>
+    <defSwitch name="TRIGGER_WEATHER" label="Weather">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="WatchDog" name="WATCHDOG_SHUTDOWN" label="Shutdown" group="Main Control" state="Idle" perm="rw" rule="AnyOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="PARK_MOUNT" label="Park Mount">
+Off
+    </defSwitch>
+    <defSwitch name="PARK_DOME" label="Park Dome">
+Off
+    </defSwitch>
+    <defSwitch name="EXECUTE_SCRIPT" label="Execute Script">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="WatchDog" name="WATCHDOG_MOUNT_POLICY" label="Mount Policy" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defSwitch name="MOUNT_IGNORED" label="Mount ignored">
+On
+    </defSwitch>
+    <defSwitch name="MOUNT_LOCKS" label="Mount locks">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="WatchDog" name="ACTIVE_DEVICES" label="Active devices" group="Options" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:35:25">
+    <defText name="ACTIVE_TELESCOPE" label="Telescope">
+Telescope Simulator
+    </defText>
+    <defText name="ACTIVE_DOME" label="Dome">
+Dome Simulator
+    </defText>
+    <defText name="ACTIVE_WEATHER" label="Weather">
+Weather Simulator
+    </defText>
+</defTextVector>

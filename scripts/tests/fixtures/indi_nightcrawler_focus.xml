@@ -1,0 +1,103 @@
+<defSwitchVector device="NightCrawler" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="NightCrawler" name="DRIVER_INFO" label="Driver Info" group="Connection" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defText name="DRIVER_NAME" label="Name">
+NightCrawler
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_nightcrawler_focus
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.5
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+4104
+    </defText>
+</defTextVector>
+<defSwitchVector device="NightCrawler" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="NightCrawler" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:32:32">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+500
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="NightCrawler" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="NightCrawler" name="CONNECTION_MODE" label="Connection Mode" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="CONNECTION_SERIAL" label="Serial">
+On
+    </defSwitch>
+    <defSwitch name="CONNECTION_TCP" label="Network">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="NightCrawler" name="SYSTEM_PORTS" label="System Ports" group="Connection" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="cu.debug-console" label="cu.debug-console">
+Off
+    </defSwitch>
+    <defSwitch name="cu.Bluetooth-Incoming-Port" label="cu.Bluetooth-Incoming-Port">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="NightCrawler" name="DEVICE_PORT" label="Ports" group="Connection" state="Idle" perm="rw" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defText name="PORT" label="Port">
+/dev/cu.usbserial
+    </defText>
+</defTextVector>
+<defSwitchVector device="NightCrawler" name="DEVICE_BAUD_RATE" label="Baud Rate" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="9600" label="9600">
+Off
+    </defSwitch>
+    <defSwitch name="19200" label="19200">
+Off
+    </defSwitch>
+    <defSwitch name="38400" label="38400">
+Off
+    </defSwitch>
+    <defSwitch name="57600" label="57600">
+On
+    </defSwitch>
+    <defSwitch name="115200" label="115200">
+Off
+    </defSwitch>
+    <defSwitch name="230400" label="230400">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="NightCrawler" name="DEVICE_AUTO_SEARCH" label="Auto Search" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+On
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="NightCrawler" name="DEVICE_PORT_SCAN" label="Refresh" group="Connection" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:32:32">
+    <defSwitch name="Scan Ports" label="Scan Ports">
+Off
+    </defSwitch>
+</defSwitchVector>

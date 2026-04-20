@@ -1,0 +1,104 @@
+<defSwitchVector device="Alignment Correction Simulator" name="CONNECTION" label="Connection" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:40:49">
+    <defSwitch name="CONNECT" label="Connect">
+Off
+    </defSwitch>
+    <defSwitch name="DISCONNECT" label="Disconnect">
+On
+    </defSwitch>
+</defSwitchVector>
+<defTextVector device="Alignment Correction Simulator" name="DRIVER_INFO" label="Driver Info" group="General Info" state="Idle" perm="ro" timeout="60" timestamp="2026-04-20T17:40:49">
+    <defText name="DRIVER_NAME" label="Name">
+Alignment Correction Simulator
+    </defText>
+    <defText name="DRIVER_EXEC" label="Exec">
+indi_simulator_pac
+    </defText>
+    <defText name="DRIVER_VERSION" label="Version">
+1.0
+    </defText>
+    <defText name="DRIVER_INTERFACE" label="Interface">
+1081344
+    </defText>
+</defTextVector>
+<defSwitchVector device="Alignment Correction Simulator" name="DEBUG" label="Debug" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:40:49">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Alignment Correction Simulator" name="SIMULATION" label="Simulation" group="Options" state="Idle" perm="rw" rule="OneOfMany" timeout="0" timestamp="2026-04-20T17:40:49">
+    <defSwitch name="ENABLE" label="Enable">
+Off
+    </defSwitch>
+    <defSwitch name="DISABLE" label="Disable">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Alignment Correction Simulator" name="CONFIG_PROCESS" label="Configuration" group="Options" state="Idle" perm="rw" rule="AtMostOne" timeout="0" timestamp="2026-04-20T17:40:49">
+    <defSwitch name="CONFIG_LOAD" label="Load">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_SAVE" label="Save">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_DEFAULT" label="Default">
+Off
+    </defSwitch>
+    <defSwitch name="CONFIG_PURGE" label="Purge">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Alignment Correction Simulator" name="POLLING_PERIOD" label="Polling" group="Options" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:40:49">
+    <defNumber name="PERIOD_MS" label="Period (ms)" format="%.f" min="10" max="600000" step="1000">
+1000
+    </defNumber>
+</defNumberVector>
+<setSwitchVector device="Alignment Correction Simulator" name="CONNECTION" state="Ok" timeout="60" timestamp="2026-04-20T17:40:51">
+    <oneSwitch name="CONNECT">
+On
+    </oneSwitch>
+    <oneSwitch name="DISCONNECT">
+Off
+    </oneSwitch>
+</setSwitchVector>
+<defNumberVector device="Alignment Correction Simulator" name="CORRECTION_GAIN" label="Correction Gain" group="Main Control" state="Idle" perm="rw" timeout="0" timestamp="2026-04-20T17:40:51">
+    <defNumber name="GAIN" label="Gain (%)" format="%.0f" min="0" max="100" step="10">
+100
+    </defNumber>
+</defNumberVector>
+<defNumberVector device="Alignment Correction Simulator" name="PAC_MANUAL_ADJUSTMENT" label="Manual Adjustment" group="Main Control" state="Idle" perm="wo" timeout="0" timestamp="2026-04-20T17:40:51">
+    <defNumber name="MANUAL_AZ_STEP" label="Azimuth Step (deg)" format="%.4f" min="-10" max="10" step="0.10000000000000000555">
+0
+    </defNumber>
+    <defNumber name="MANUAL_ALT_STEP" label="Altitude Step (deg)" format="%.4f" min="-10" max="10" step="0.10000000000000000555">
+0
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Alignment Correction Simulator" name="PAC_ABORT_MOTION" label="Abort Motion" group="Main Control" state="Idle" perm="rw" rule="AtMostOne" timeout="60" timestamp="2026-04-20T17:40:51">
+    <defSwitch name="ABORT" label="Abort">
+Off
+    </defSwitch>
+</defSwitchVector>
+<defNumberVector device="Alignment Correction Simulator" name="PAC_SPEED" label="Speed" group="Main Control" state="Ok" perm="rw" timeout="60" timestamp="2026-04-20T17:40:51">
+    <defNumber name="PAC_SPEED_VALUE" label="Speed" format="%.0f" min="1" max="5" step="1">
+1
+    </defNumber>
+</defNumberVector>
+<defSwitchVector device="Alignment Correction Simulator" name="PAC_AZ_REVERSE" label="Azimuth Reverse" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:40:51">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+Off
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+On
+    </defSwitch>
+</defSwitchVector>
+<defSwitchVector device="Alignment Correction Simulator" name="PAC_ALT_REVERSE" label="Altitude Reverse" group="Main Control" state="Idle" perm="rw" rule="OneOfMany" timeout="60" timestamp="2026-04-20T17:40:51">
+    <defSwitch name="INDI_ENABLED" label="Enabled">
+Off
+    </defSwitch>
+    <defSwitch name="INDI_DISABLED" label="Disabled">
+On
+    </defSwitch>
+</defSwitchVector>
