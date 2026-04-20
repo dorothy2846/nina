@@ -364,6 +364,17 @@ public class IndiDiscoveryService : BackgroundService
         return (alt, az);
     }
 
+    /// <summary>Lightweight "does this INDI device advertise property X" check. Used by
+    /// controllers to populate capability flags in /info responses so iOS can disable
+    /// buttons the driver won't honour (e.g. a mount without TELESCOPE_TRACK_MODE).</summary>
+    public bool DeviceHasProperty(string deviceName, string property)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        return dev != null && dev.Properties.ContainsKey(property);
+    }
+
     /// <summary>Current focuser absolute position, or null if the driver hasn't emitted
     /// ABS_FOCUS_POSITION yet. Used by filter change to compute offset-adjusted targets.</summary>
     public int? GetFocuserPosition(string deviceName)

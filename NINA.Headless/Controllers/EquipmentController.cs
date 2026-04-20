@@ -17,6 +17,11 @@ public class EquipmentController : ControllerBase
     private readonly IFilterWheelMediator _filterWheel;
     private readonly IRotatorMediator _rotator;
     private readonly IDomeMediator _dome;
+    private readonly ISafetyMonitorMediator _safety;
+    private readonly EquipmentSelectionService _equipment;
+    private readonly IndiDiscoveryService _indi;
+    private readonly IndiServerManager _indiServer;
+    private readonly Phd2Service _phd2;
 
     public EquipmentController(
         NinaStateService state,
@@ -26,7 +31,12 @@ public class EquipmentController : ControllerBase
         IFocuserMediator focuser,
         IFilterWheelMediator filterWheel,
         IRotatorMediator rotator,
-        IDomeMediator dome)
+        IDomeMediator dome,
+        ISafetyMonitorMediator safety,
+        EquipmentSelectionService equipment,
+        IndiDiscoveryService indi,
+        IndiServerManager indiServer,
+        Phd2Service phd2)
     {
         _state = state;
         _camera = camera;
@@ -36,60 +46,70 @@ public class EquipmentController : ControllerBase
         _filterWheel = filterWheel;
         _rotator = rotator;
         _dome = dome;
+        _safety = safety;
+        _equipment = equipment;
+        _indi = indi;
+        _indiServer = indiServer;
+        _phd2 = phd2;
     }
+
+    private static object[] AsList(IEnumerable<EquipmentDescriptor> devs)
+        => devs.Select(d => (object)new { id = d.Id, name = d.Name }).ToArray();
 
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var focuserInfo = _focuser.GetInfo();
-        var filterWheelInfo = _filterWheel.GetInfo();
-        var rotatorInfo = _rotator.GetInfo();
-        var domeInfo = _dome.GetInfo();
-
         return Ok(new
         {
-            camera = _state.BuildCameraStatus(),
-            telescope = _state.BuildTelescopeStatus(),
-            guider = _state.BuildGuiderStatus(),
-            focuser = new
-            {
-                connected = focuserInfo?.Connected ?? false,
-                name = focuserInfo?.Name ?? "No Focuser",
-                position = (int?)focuserInfo?.Position,
-                temperature = focuserInfo != null && !double.IsNaN(focuserInfo.Temperature) ? focuserInfo.Temperature : (double?)null,
-                isMoving = (bool?)focuserInfo?.IsMoving
-            },
-            filterWheel = new
-            {
-                connected = filterWheelInfo?.Connected ?? false,
-                name = filterWheelInfo?.Name ?? "No Filter Wheel",
-                currentPosition = filterWheelInfo?.SelectedFilter?.Position,
-                currentFilterName = filterWheelInfo?.SelectedFilter?.Name,
-                isMoving = (bool?)filterWheelInfo?.IsMoving
-            },
-            rotator = new
-            {
-                connected = rotatorInfo?.Connected ?? false,
-                name = rotatorInfo?.Name ?? "No Rotator",
-                position = (float?)rotatorInfo?.Position,
-                mechanicalPosition = (float?)rotatorInfo?.MechanicalPosition,
-                isMoving = (bool?)rotatorInfo?.IsMoving
-            },
-            dome = new
-            {
-                connected = domeInfo?.Connected ?? false,
-                name = domeInfo?.Name ?? "No Dome",
-                azimuth = domeInfo?.Azimuth,
-                shutterStatus = domeInfo?.ShutterStatus.ToString() ?? "Unknown",
-                slewing = (bool?)domeInfo?.Slewing,
-                atPark = (bool?)domeInfo?.AtPark,
-                atHome = (bool?)domeInfo?.AtHome
-            },
-            safetyMonitor = new { connected = false, name = "No Safety Monitor" },
-            flatDevice = new { connected = false, name = "No Flat Device" },
-            weather = new { connected = false, name = "No Weather Station" },
-            @switch = new { connected = false, name = "No Switch" }
+            camera = _state.BuildCameraStatus(),  // already gated by CameraSelectionService in SimulatorService
+            telescope = StatusOf(DeviceKind.Telescope, () => _indi.BuildTelescopeStatus(_equipment.GetSelected(DeviceKind.Telescope)!.UniqueId)),
+            focuser = StatusOf(DeviceKind.Focuser, () => _indi.BuildFocuserStatus(_equipment.GetSelected(DeviceKind.Focuser)!.UniqueId)),
+            filterWheel = StatusOf(DeviceKind.FilterWheel, () => _indi.BuildFilterWheelStatus(_equipment.GetSelected(DeviceKind.FilterWheel)!.UniqueId)),
+            rotator = StatusOf(DeviceKind.Rotator, () => null),
+            dome = StatusOf(DeviceKind.Dome, () => null),
+            // Guider state comes from Phd2Service (live JSON-RPC socket), NOT the NINA
+            // GuiderMediator — we bypass NINA's guider orchestration and drive PHD2
+            // directly, so BuildGuiderStatus never sees "connected" and iOS's
+            // card would stay stuck on "Connecting…" forever while polling /equipment/status.
+            guider = _phd2.Snapshot(),
+            flatDevice = StatusOf(DeviceKind.FlatPanel, () => null),
+            safetyMonitor = BuildSafetyMonitorStatus(),
+            weather = BuildWeatherStatus(),
+            @switch = BuildSwitchStatus()
         });
+    }
+
+    private object BuildSafetyMonitorStatus()
+    {
+        var info = _safety.GetInfo();
+        if (info == null || !info.Connected) return new { connected = false, name = "Not connected", isSafe = (bool?)null };
+        return new { connected = true, name = info.Name, isSafe = info.IsSafe };
+    }
+
+    private object BuildSwitchStatus()
+    {
+        if (!_equipment.IsConnected(DeviceKind.Switch)) return new { connected = false, name = "Not connected" };
+        var sel = _equipment.GetSelected(DeviceKind.Switch);
+        return sel == null ? new { connected = false, name = "Not connected" } : _indi.BuildSwitchStatus(sel);
+    }
+
+    private object BuildWeatherStatus()
+    {
+        if (!_equipment.IsConnected(DeviceKind.Weather)) return new { connected = false, name = "Not connected" };
+        var sel = _equipment.GetSelected(DeviceKind.Weather);
+        return sel == null ? new { connected = false, name = "Not connected" } : _indi.BuildWeatherStatus(sel);
+    }
+
+    /// <summary>Build per-device status: empty/disconnected unless EquipmentSelectionService says it's connected.</summary>
+    private object StatusOf(DeviceKind kind, Func<object?> indiBuilder)
+    {
+        if (!_equipment.IsConnected(kind)) return new { connected = false, name = "Not connected" };
+        var selected = _equipment.GetSelected(kind);
+        if (selected?.Provider == EquipmentProvider.Indi)
+        {
+            return indiBuilder() ?? new { connected = true, name = selected.Name };
+        }
+        return new { connected = true, name = selected?.Name ?? "Unknown" };
     }
 
     [HttpGet("devices")]
@@ -97,42 +117,20 @@ public class EquipmentController : ControllerBase
     {
         return Ok(new
         {
-            cameras = new[]
-            {
-                new { id = "asi294mc_stub", name = "ZWO ASI294MC Pro (Stub)" },
-                new { id = "simulator", name = "N.I.N.A. Simulator" }
-            },
-            telescopes = new[]
-            {
-                new { id = "simulator", name = "N.I.N.A. Simulator" },
-                new { id = "ascom_eqmod", name = "EQMOD ASCOM HEQ5/6 (Stub)" }
-            },
+            cameras = AsList(_equipment.GetAvailable(DeviceKind.Camera)),
+            telescopes = AsList(_equipment.GetAvailable(DeviceKind.Telescope)),
+            focusers = AsList(_equipment.GetAvailable(DeviceKind.Focuser)),
+            filterWheels = AsList(_equipment.GetAvailable(DeviceKind.FilterWheel)),
+            rotators = AsList(_equipment.GetAvailable(DeviceKind.Rotator)),
+            domes = AsList(_equipment.GetAvailable(DeviceKind.Dome)),
             guiders = new[]
             {
-                new { id = "phd2", name = "PHD2" },
-                new { id = "internal", name = "N.I.N.A. Internal Guider" }
+                new { id = "phd2", name = "PHD2" }
             },
-            focusers = new[]
-            {
-                new { id = "simulator", name = "N.I.N.A. Simulator" }
-            },
-            filterWheels = new[]
-            {
-                new { id = "manual", name = "Manual Filter Wheel" },
-                new { id = "simulator", name = "N.I.N.A. Simulator" }
-            },
-            rotators = new[]
-            {
-                new { id = "simulator", name = "N.I.N.A. Simulator" }
-            },
-            domes = new[]
-            {
-                new { id = "simulator", name = "N.I.N.A. Simulator" }
-            },
-            safetyMonitors = Array.Empty<object>(),
-            flatDevices = Array.Empty<object>(),
-            weather = Array.Empty<object>(),
-            switches = Array.Empty<object>()
+            flatDevices = AsList(_equipment.GetAvailable(DeviceKind.FlatPanel)),
+            safetyMonitors = AsList(_equipment.GetAvailable(DeviceKind.SafetyMonitor)),
+            weather = AsList(_equipment.GetAvailable(DeviceKind.Weather)),
+            switches = AsList(_equipment.GetAvailable(DeviceKind.Switch))
         });
     }
 
@@ -236,5 +234,79 @@ public class EquipmentController : ControllerBase
 
         _state.NotifyStateChanged("equipment", _state.BuildEquipmentStatus());
         return Ok(new { results });
+    }
+
+    // ----- Device rescan / INDI server restart -----
+    //
+    // Two escalating levels for "my camera/scope isn't showing up":
+    //   • /rescan — drops the INDI client and lets the background loop reconnect. Rebuilds
+    //     the device list from what the driver currently publishes. Handles ~90% of the
+    //     "plugged in after the app started" cases.
+    //   • /indi/restart — kills and relaunches the whole indiserver child process. Use when
+    //     a driver is wedged and the rescan didn't help.
+
+    [HttpPost("rescan")]
+    public async Task<IActionResult> Rescan()
+    {
+        await _indi.RequestRescanAsync(HttpContext.RequestAborted);
+        return Ok(new { success = true, message = "INDI client reconnecting — device list will refresh in ~3s" });
+    }
+
+    [HttpPost("indi/restart")]
+    public async Task<IActionResult> RestartIndiServer()
+    {
+        try
+        {
+            _indiServer.RestartServer();
+            // Also force the discovery client to reconnect — otherwise it would hold onto
+            // a stale connection pointing at the old process socket.
+            await _indi.RequestRescanAsync(HttpContext.RequestAborted);
+            return Ok(new { success = true, message = "indiserver restarted — drivers reloaded" });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
+    }
+
+    public record RestartDriverRequest(string? DeviceId, string? DriverName);
+
+    /// <summary>Restart a single driver child process. This is the per-device version of the
+    /// nuclear /indi/restart: only the named driver dies and respawns, every other driver
+    /// (and any operation they're running — slewing, guiding, exposing on another camera)
+    /// is untouched.
+    ///
+    /// Accepts either:
+    ///   • deviceId — server looks up DRIVER_INFO.DRIVER_EXEC for that device.
+    ///   • driverName — raw driver binary (e.g. "indi_asi_ccd"). Fallback for when the
+    ///     device isn't currently published (the driver is wedged and never got that far).</summary>
+    [HttpPost("driver/restart")]
+    public async Task<IActionResult> RestartDriver([FromBody] RestartDriverRequest? req)
+    {
+        string? driverName = req?.DriverName;
+        if (string.IsNullOrWhiteSpace(driverName) && !string.IsNullOrWhiteSpace(req?.DeviceId))
+        {
+            // deviceId may be "indi:Player One CCD Uranus-C PRO" (our app-side id) or the
+            // raw INDI device name. Strip the "indi:" prefix if present.
+            var devName = req!.DeviceId!.StartsWith("indi:", StringComparison.Ordinal)
+                ? req.DeviceId.Substring(5)
+                : req.DeviceId;
+            driverName = _indi.GetDriverExec(devName);
+        }
+
+        if (string.IsNullOrWhiteSpace(driverName))
+        {
+            return BadRequest(new { success = false, message = "Could not resolve driver name from request — send either driverName directly or a deviceId for a currently-published device" });
+        }
+
+        try
+        {
+            await _indiServer.RestartDriverAsync(driverName, HttpContext.RequestAborted);
+            return Ok(new { success = true, message = $"Driver {driverName} restart queued", driverName });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = ex.Message });
+        }
     }
 }

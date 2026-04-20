@@ -51,6 +51,23 @@ public class CameraController : ControllerBase
             return Ok(new { connected = false, name = "Not connected" });
         }
 
+        // Capability probes — dew heater support varies widely across INDI drivers
+        // (CCD_DEW_CONTROL vs AUX_HEATER_TOGGLE vs ANTI_DEW); the setter tries all
+        // three, so "supported" = any of them present.
+        var selected = _cameraSelection.GetSelected();
+        var indiName = (_cameraSelection.IsConnected && selected?.Provider == CameraProvider.Indi) ? selected.UniqueId : null;
+        var capabilities = new
+        {
+            canSetTemperature = info.CanSetTemperature,
+            canAbort = indiName != null && _indi.DeviceHasProperty(indiName, "CCD_ABORT_EXPOSURE"),
+            hasDewHeater = indiName != null && (
+                _indi.DeviceHasProperty(indiName, "CCD_DEW_CONTROL") ||
+                _indi.DeviceHasProperty(indiName, "AUX_HEATER_TOGGLE") ||
+                _indi.DeviceHasProperty(indiName, "ANTI_DEW")),
+            hasOffset = indiName != null && _indi.DeviceHasProperty(indiName, "CCD_OFFSET"),
+            hasGain = indiName != null && _indi.DeviceHasProperty(indiName, "CCD_GAIN")
+        };
+
         return Ok(new
         {
             name = info.Name,
@@ -60,13 +77,15 @@ public class CameraController : ControllerBase
             gain = info.Gain,
             offset = info.Offset,
             binning = info.BinX,
+            // Legacy — new iOS reads capabilities.canSetTemperature instead.
             canSetTemperature = info.CanSetTemperature,
             sensorType = info.SensorType.ToString(),
             bitDepth = info.BitDepth,
             pixelSizeX = info.PixelSize,
             pixelSizeY = info.PixelSize,
             resolutionX = info.XSize,
-            resolutionY = info.YSize
+            resolutionY = info.YSize,
+            capabilities
         });
     }
 

@@ -72,7 +72,18 @@ public class FocuserController : ControllerBase
         var info = _focuser.GetInfo();
         if (info == null) return Ok(new { connected = false });
 
-        var device = _focuser.GetDevice() as IFocuser;
+        // Feature probes — iOS greys out the matching control when the driver doesn't
+        // expose the property. INDI standard names first; older drivers fall back via
+        // the AUTO_FOCUS_COMP variant checked by the setter itself.
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        var indiName = (_equipment.IsConnected(DeviceKind.Focuser) && selected?.Provider == EquipmentProvider.Indi) ? selected.UniqueId : null;
+        var capabilities = new
+        {
+            hasTemperature = indiName != null && _indi.DeviceHasProperty(indiName, "FOCUS_TEMPERATURE"),
+            hasTempCompensation = indiName != null && (_indi.DeviceHasProperty(indiName, "FOCUS_TEMPERATURE_COMPENSATION") || _indi.DeviceHasProperty(indiName, "AUTO_FOCUS_COMP")),
+            hasBacklash = indiName != null && (_indi.DeviceHasProperty(indiName, "FOCUS_BACKLASH_STEPS") || _indi.DeviceHasProperty(indiName, "FOCUS_BACKLASH_TOGGLE"))
+        };
+
         return Ok(new
         {
             connected = info.Connected,
@@ -80,7 +91,8 @@ public class FocuserController : ControllerBase
             position = info.Position,
             temperature = double.IsNaN(info.Temperature) ? (double?)null : info.Temperature,
             stepSize = info.StepSize,
-            isMoving = info.IsMoving
+            isMoving = info.IsMoving,
+            capabilities
         });
     }
 

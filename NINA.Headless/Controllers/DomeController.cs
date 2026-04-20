@@ -32,6 +32,18 @@ public class DomeController : ControllerBase
             return Ok(new { connected = false, name = "Not connected" });
         }
 
+        // Capability probes — slit-only / shutter-only domes have subsets; the UI
+        // hides controls that would error on the hardware.
+        var device = _dome.GetDevice() as IDome;
+        var capabilities = new
+        {
+            canSetAzimuth = device?.CanSetAzimuth ?? false,
+            canSetShutter = device?.CanSetShutter ?? false,
+            canFindHome = device?.CanFindHome ?? false,
+            canPark = device?.CanPark ?? false,
+            canSyncAzimuth = device?.CanSyncAzimuth ?? false
+        };
+
         return Ok(new
         {
             connected = info.Connected,
@@ -42,7 +54,8 @@ public class DomeController : ControllerBase
             atPark = info.AtPark,
             shutterStatus = ToShutterStatus(info.ShutterStatus),
             slewing = info.Slewing,
-            slaved = info.DriverFollowing || info.ApplicationFollowing
+            slaved = info.DriverFollowing || info.ApplicationFollowing,
+            capabilities
         });
     }
 

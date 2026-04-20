@@ -36,6 +36,8 @@ builder.Services.AddSingleton<RotatorMediator>();
 builder.Services.AddSingleton<IRotatorMediator>(sp => sp.GetRequiredService<RotatorMediator>());
 builder.Services.AddSingleton<DomeMediator>();
 builder.Services.AddSingleton<IDomeMediator>(sp => sp.GetRequiredService<DomeMediator>());
+builder.Services.AddSingleton<SafetyMonitorMediator>();
+builder.Services.AddSingleton<ISafetyMonitorMediator>(sp => sp.GetRequiredService<SafetyMonitorMediator>());
 builder.Services.AddSingleton<NinaStateService>();
 builder.Services.AddSingleton<OneShotAiService>();
 builder.Services.AddSingleton<SequencerService>();

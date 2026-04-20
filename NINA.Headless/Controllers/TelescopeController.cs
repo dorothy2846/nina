@@ -37,6 +37,25 @@ public class TelescopeController : ControllerBase
             return Ok(new { connected = false, name = "Not connected" });
         }
 
+        // Capability flags — iOS disables the matching control when a flag is false so
+        // users don't tap buttons the driver silently ignores. NINA's TelescopeInfo
+        // surfaces most of these from the underlying driver; TELESCOPE_TRACK_MODE
+        // is INDI-only and probed directly since push-to mounts omit it.
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        var indiName = (_equipment.IsConnected(DeviceKind.Telescope) && selected?.Provider == EquipmentProvider.Indi) ? selected.UniqueId : null;
+        var capabilities = new
+        {
+            canSlew = info.CanSlew,
+            canSlewAltAz = info.CanSlewAltAz,
+            canPark = info.CanPark,
+            canUnpark = info.CanPark,
+            canFindHome = info.CanFindHome,
+            canSetTracking = info.CanSetTrackingEnabled,
+            canSetTrackRate = indiName != null && _indi.DeviceHasProperty(indiName, "TELESCOPE_TRACK_MODE"),
+            canPulseGuide = info.CanPulseGuide,
+            canSync = true  // INDI ON_COORD_SET exposes SYNC on every goto mount; no runtime flag exposed.
+        };
+
         return Ok(new
         {
             name = info.Name,
@@ -47,6 +66,7 @@ public class TelescopeController : ControllerBase
             az = info.Azimuth,
             tracking = info.TrackingEnabled,
             parked = info.AtPark,
+            // Legacy fields — kept for older iOS builds. New iOS reads from `capabilities`.
             canSlew = info.CanSlew,
             canPark = info.CanPark,
             canSetTracking = info.CanSetTrackingEnabled,
@@ -54,7 +74,8 @@ public class TelescopeController : ControllerBase
             siteLatitude = info.SiteLatitude,
             siteLongitude = info.SiteLongitude,
             siteElevation = info.SiteElevation,
-            alignmentMode = info.AlignmentMode.ToString()
+            alignmentMode = info.AlignmentMode.ToString(),
+            capabilities
         });
     }
 
