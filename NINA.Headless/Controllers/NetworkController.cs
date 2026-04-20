@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using NINA.Headless.Services.Network;
+using NINA.Headless.Services.Remote;
 
 namespace NINA.Headless.Controllers;
 
@@ -10,12 +11,24 @@ public class NetworkController : ControllerBase
     private readonly IApModeProvider _ap;
     private readonly ApModeConfigStore _store;
     private readonly ApModeChangeService _change;
+    private readonly PairedDeviceStore _paired;
 
-    public NetworkController(IApModeProvider ap, ApModeConfigStore store, ApModeChangeService change)
+    public NetworkController(IApModeProvider ap, ApModeConfigStore store, ApModeChangeService change, PairedDeviceStore paired)
     {
         _ap = ap;
         _store = store;
         _change = change;
+        _paired = paired;
+    }
+
+    /// <summary>Bearer-token gate. AP settings reveal the WPA passphrase and can brick LAN
+    /// access, so anyone touching these endpoints must be a paired device. Pairing itself
+    /// is a separate unauthenticated flow gated by AP-mode proximity (see PairedDeviceStore).</summary>
+    private bool IsAuthorized()
+    {
+        var auth = Request.Headers.Authorization.ToString();
+        var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? auth[7..].Trim() : "";
+        return _paired.Verify(token) != null;
     }
 
     /// <summary>Capability probe + current status — iOS uses this to decide whether to
@@ -23,6 +36,7 @@ public class NetworkController : ControllerBase
     [HttpGet("ap/status")]
     public async Task<IActionResult> ApStatus()
     {
+        if (!IsAuthorized()) return Unauthorized();
         var caps = await _ap.GetCapabilitiesAsync(HttpContext.RequestAborted);
         var status = await _ap.GetStatusAsync(HttpContext.RequestAborted);
         var cfg = _store.Load();
@@ -54,6 +68,7 @@ public class NetworkController : ControllerBase
     [HttpPost("ap/config")]
     public async Task<IActionResult> SaveApConfig([FromBody] ApConfigRequest req)
     {
+        if (!IsAuthorized()) return Unauthorized();
         var current = _store.Load();
         var ssid = string.IsNullOrWhiteSpace(req.Ssid) ? current.Ssid : req.Ssid!.Trim();
         var password = string.IsNullOrWhiteSpace(req.Password) ? current.Password : req.Password!;
@@ -99,6 +114,7 @@ public class NetworkController : ControllerBase
     [HttpPost("ap/enable")]
     public async Task<IActionResult> EnableAp()
     {
+        if (!IsAuthorized()) return Unauthorized();
         var cfg = _store.Load();
         var result = await _change.ChangeAsync(cfg, HttpContext.RequestAborted);
         if (!result.Success)
@@ -115,6 +131,7 @@ public class NetworkController : ControllerBase
     [HttpPost("ap/disable")]
     public async Task<IActionResult> DisableAp()
     {
+        if (!IsAuthorized()) return Unauthorized();
         var ok = await _ap.DisableAsync(HttpContext.RequestAborted);
         return Ok(new { success = ok });
     }
@@ -128,6 +145,7 @@ public class NetworkController : ControllerBase
     [HttpPost("mode")]
     public IActionResult SetMode([FromBody] ModeRequest req)
     {
+        if (!IsAuthorized()) return Unauthorized();
         if (!Enum.TryParse<OperationalMode>(req.Mode, ignoreCase: true, out var mode))
             return BadRequest(new { success = false, message = "mode는 field 또는 unattended" });
         var cur = _store.Load();
@@ -138,6 +156,7 @@ public class NetworkController : ControllerBase
     [HttpGet("mode")]
     public IActionResult GetMode()
     {
+        if (!IsAuthorized()) return Unauthorized();
         var cfg = _store.Load();
         return Ok(new { mode = cfg.Mode.ToString().ToLowerInvariant(), effectiveAutoFallback = cfg.EffectiveAutoFallback });
     }
