@@ -156,35 +156,44 @@ def smoke_test(driver: Path, port: int, startup_timeout: float = 5.0,
                     pass
             return (False, f"socket never bound within {startup_timeout}s{hint}", 0)
 
-        # Ask for all properties. INDI is XML-over-plaintext.
+        # Initial getProperties — every driver responds with at least
+        # CONNECTION + DRIVER_INFO. Real drivers stop around here until hardware
+        # is connected; drivers with SIMULATION support will stream their full
+        # property map once we flip that switch below.
         sock.sendall(b"<getProperties version='1.7'/>\n")
-
-        # Collect the initial (pre-connection) property set. Real drivers stop
-        # here — they advertise only CONNECTION / DRIVER_INFO / generic until
-        # hardware is actually wired up. Simulators keep publishing because they
-        # fake the connection state; we'll drive them further below.
-        sock.settimeout(property_timeout)
         buf = _drain(sock, property_timeout, max_bytes=200_000)
 
-        # Fire a CONNECT command — simulators respond with their full capability
-        # vector set; real drivers without hardware time out or fail gracefully
-        # (we just don't block waiting on them). This is what lets the capability
-        # matrix see CCD_COOLER / FOCUS_TEMPERATURE / TELESCOPE_TRACK_MODE for
-        # drivers that have those features.
         device = _first_device_name(buf)
         if device:
-            connect_xml = (
-                f"<newSwitchVector device='{device}' name='CONNECTION'>"
-                f"<oneSwitch name='CONNECT'>On</oneSwitch>"
-                f"<oneSwitch name='DISCONNECT'>Off</oneSwitch>"
-                f"</newSwitchVector>\n"
-            ).encode()
+            # Per-driver convention: if the driver publishes a `SIMULATION`
+            # switch it supports a "fake hardware" mode. Setting SIMULATION=On
+            # then CONNECT=On exposes the FULL capability property set without
+            # needing real gear — exactly what we need for offline capability
+            # verification across the whole driver fleet.
+            if b'name="SIMULATION"' in buf:
+                try:
+                    sock.sendall((
+                        f"<newSwitchVector device='{device}' name='SIMULATION'>"
+                        f"<oneSwitch name='ENABLE'>On</oneSwitch>"
+                        f"<oneSwitch name='DISABLE'>Off</oneSwitch>"
+                        f"</newSwitchVector>\n"
+                    ).encode())
+                    buf += _drain(sock, 0.5, max_bytes=100_000)
+                except (BrokenPipeError, OSError):
+                    pass
+
+            # CONNECT. For drivers with SIMULATION=ENABLE this succeeds and
+            # produces the full property stream; otherwise the driver either
+            # errors (and we capture whatever generic set it published) or
+            # hangs waiting for hardware (we time out after 5s).
             try:
-                sock.sendall(connect_xml)
-                # Wait a bit longer for post-connect properties; real drivers
-                # either respond quickly with an error or hang on hardware —
-                # we give up either way after the timeout.
-                buf += _drain(sock, 3.0, max_bytes=500_000)
+                sock.sendall((
+                    f"<newSwitchVector device='{device}' name='CONNECTION'>"
+                    f"<oneSwitch name='CONNECT'>On</oneSwitch>"
+                    f"<oneSwitch name='DISCONNECT'>Off</oneSwitch>"
+                    f"</newSwitchVector>\n"
+                ).encode())
+                buf += _drain(sock, 5.0, max_bytes=500_000)
             except (BrokenPipeError, OSError):
                 pass
 

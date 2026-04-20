@@ -116,7 +116,36 @@ def is_simulator(name: str) -> bool:
     return "_simulator_" in name or name.endswith("simulator")
 
 
-def run(fixture_dir: Path, csv: bool, filter_str: str | None, include_sim: bool) -> int:
+def emit_json(rows: list[dict]) -> str:
+    """Catalog JSON for the iOS SupportedEquipmentView. Flattens each driver to
+    a display-friendly shape: name, one primary kind (first bit set), full list
+    of kinds for multi-interface drivers, plus the capability probe verdicts
+    for the ones that published capability properties. Simulators carry their
+    probe data; real drivers mostly just carry name + kind."""
+    import json
+    catalog = []
+    for r in sorted(rows, key=lambda d: (d["kinds"][0] if d["kinds"] else "Z", d["driver"])):
+        primary = r["kinds"][0] if r["kinds"] else "Unknown"
+        # Strip the common indi_ prefix + _<kind> suffix when present for display.
+        display = r["driver"].removeprefix("indi_")
+        for suffix in ("_ccd", "_telescope", "_focus", "_wheel", "_rotator",
+                        "_dome", "_weather"):
+            if display.endswith(suffix):
+                display = display[: -len(suffix)]
+                break
+        catalog.append({
+            "binary":     r["driver"],
+            "display":    display.replace("_", " "),
+            "primary":    primary,
+            "kinds":      r["kinds"],
+            "isSimulator": r["is_simulator"],
+            "capabilities": {k: v for k, v in r["caps"].items() if v},
+        })
+    return json.dumps({"drivers": catalog}, indent=2, sort_keys=True)
+
+
+def run(fixture_dir: Path, csv: bool, filter_str: str | None, include_sim: bool,
+        json_output: bool = False) -> int:
     fixtures = sorted(fixture_dir.glob("*.xml"))
     if filter_str:
         fixtures = [f for f in fixtures if filter_str in f.stem]
@@ -138,6 +167,10 @@ def run(fixture_dir: Path, csv: bool, filter_str: str | None, include_sim: bool)
 
     real_rows = [r for r in rows if not r["is_simulator"]]
     sim_rows = [r for r in rows if r["is_simulator"]]
+
+    if json_output:
+        print(emit_json(rows))
+        return 0
 
     if csv:
         fields = ["driver", "kinds", "interface", "property_count", "is_simulator"] + list(PROBES.keys())
@@ -219,8 +252,11 @@ def main():
     ap.add_argument("--filter", default=None)
     ap.add_argument("--no-simulators", action="store_true",
                     help="Skip the simulator capability section")
+    ap.add_argument("--json", action="store_true",
+                    help="Emit supported-driver catalog as JSON (for the iOS app bundle)")
     args = ap.parse_args()
-    sys.exit(run(Path(args.fixture_dir), args.csv, args.filter, not args.no_simulators))
+    sys.exit(run(Path(args.fixture_dir), args.csv, args.filter, not args.no_simulators,
+                  json_output=args.json))
 
 
 if __name__ == "__main__":
