@@ -16,11 +16,16 @@ public class TelescopeController : ControllerBase
 {
     private readonly NinaStateService _state;
     private readonly IHubContext<NinaHub> _hub;
+    private readonly EquipmentSelectionService _equipment;
+    private readonly IndiDiscoveryService _indi;
 
-    public TelescopeController(NinaStateService state, IHubContext<NinaHub> hub)
+    public TelescopeController(NinaStateService state, IHubContext<NinaHub> hub,
+        EquipmentSelectionService equipment, IndiDiscoveryService indi)
     {
         _state = state;
         _hub = hub;
+        _equipment = equipment;
+        _indi = indi;
     }
 
     [HttpGet("info")]
@@ -53,93 +58,108 @@ public class TelescopeController : ControllerBase
         });
     }
 
+    [HttpGet("debug")]
+    public IActionResult Debug()
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        var uniqueId = selected?.UniqueId;
+        var isConnEq = _equipment.IsConnected(DeviceKind.Telescope);
+        var indi = _indi.Client;
+        var dev = uniqueId != null ? indi?.GetDevice(uniqueId) : null;
+        string? connVal = null;
+        string? disconnVal = null;
+        string? propState = null;
+        if (dev != null && dev.Properties.TryGetValue("CONNECTION", out var prop))
+        {
+            connVal = prop["CONNECT"]?.Value;
+            disconnVal = prop["DISCONNECT"]?.Value;
+            propState = prop.State.ToString();
+        }
+        var allProps = dev?.Properties.Keys.OrderBy(k => k).ToArray();
+        return Ok(new
+        {
+            selectedId = selected?.Id,
+            selectedUniqueId = uniqueId,
+            equipmentSaysConnected = isConnEq,
+            indiClientAlive = indi?.IsConnected,
+            deviceFoundInClient = dev != null,
+            deviceIsConnected = dev?.IsConnected,
+            rawConnectValue = connVal,
+            rawDisconnectValue = disconnVal,
+            connectionState = propState,
+            allPropertyNames = allProps,
+            propertyCount = allProps?.Length
+        });
+    }
+
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
-        var info = _state.TelescopeInfo;
-        if (info == null)
+        // Prefer INDI when an INDI telescope is selected and connected.
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (_equipment.IsConnected(DeviceKind.Telescope) && selected?.Provider == EquipmentProvider.Indi)
         {
-            return Ok(new { connected = false, state = "disconnected" });
+            var s = _indi.BuildTelescopeStatus(selected.UniqueId);
+            if (s != null) return Ok(s);
         }
 
-        return Ok(new
-        {
-            connected = info.Connected,
-            name = info.Name,
-            ra = info.RightAscension,
-            dec = info.Declination,
-            alt = info.Altitude,
-            az = info.Azimuth,
-            tracking = info.TrackingEnabled,
-            parked = info.AtPark,
-            slewing = info.Slewing,
-            siderealTime = info.SiderealTime,
-            pierSide = info.SideOfPier.ToString()
-        });
+        return Ok(new { connected = false, name = "Not connected" });
     }
 
     [HttpPost("connect")]
-    public async Task<IActionResult> Connect([FromBody] ConnectRequest? request)
+    public IActionResult Connect([FromBody] ConnectRequest? request)
     {
-        var success = await _state.TelescopeMediator.Connect();
-        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
-        await _hub.Clients.All.SendAsync("EquipmentStatus", _state.BuildEquipmentStatus());
-
-        if (!success)
+        var deviceId = request?.DeviceId;
+        if (string.IsNullOrWhiteSpace(deviceId))
         {
-            return StatusCode(503, new { success = false, message = "Failed to connect telescope", deviceId = request?.DeviceId ?? "default" });
+            return BadRequest(new { success = false, message = "deviceId required" });
         }
 
-        return Ok(new
+        if (!_equipment.Connect(DeviceKind.Telescope, deviceId))
         {
-            success = true,
-            message = "Telescope connected",
-            deviceId = request?.DeviceId ?? "default"
-        });
+            return NotFound(new { success = false, message = $"Unknown telescope deviceId '{deviceId}'", deviceId });
+        }
+
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (selected?.Provider == EquipmentProvider.Indi)
+        {
+            // Record the user's intent and let the coalescing worker drive the driver toward
+            // it. Rapid toggles are collapsed by the worker (reads current intent at every
+            // step), so no background queue builds up.
+            _indi.RequestConnectionIntent(selected.UniqueId, connected: true);
+        }
+
+        return Accepted(new { success = true, message = "Connect requested; poll /status to observe connected state", deviceId, name = selected?.Name });
     }
 
     [HttpPost("disconnect")]
-    public async Task<IActionResult> Disconnect()
+    public IActionResult Disconnect()
     {
-        await _state.TelescopeMediator.Disconnect();
-        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
-        await _hub.Clients.All.SendAsync("EquipmentStatus", _state.BuildEquipmentStatus());
-
-        return Ok(new
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (selected?.Provider == EquipmentProvider.Indi)
         {
-            success = true,
-            message = "Telescope disconnected"
-        });
+            _indi.RequestConnectionIntent(selected.UniqueId, connected: false);
+        }
+        return Accepted(new { success = true, message = "Disconnect requested" });
     }
 
     [HttpPost("slew")]
     public async Task<IActionResult> Slew([FromBody] SlewRequest request)
     {
         if (request.RA < 0 || request.RA >= 360)
-        {
             return BadRequest(new { success = false, message = "RA must be between 0 and 360 degrees" });
-        }
         if (request.Dec < -90 || request.Dec > 90)
-        {
             return BadRequest(new { success = false, message = "Dec must be between -90 and 90 degrees" });
-        }
 
-        var coordinates = new Coordinates(request.RA, request.Dec, Epoch.JNOW, Coordinates.RAType.Degrees);
-        var success = await _state.TelescopeMediator.SlewToCoordinatesAsync(coordinates, CancellationToken.None);
-        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        if (_indi.IsTelescopeParked(selected.UniqueId))
+            return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
 
-        if (!success)
-        {
-            return StatusCode(500, new { success = false, message = "Telescope slew failed" });
-        }
-
-        return Ok(new
-        {
-            success = true,
-            message = $"Slewing to RA={request.RA:F4}, Dec={request.Dec:F4}",
-            ra = request.RA,
-            dec = request.Dec
-        });
+        // API passes RA in degrees; INDI expects hours.
+        await _indi.TelescopeSlewAsync(selected.UniqueId, request.RA / 15.0, request.Dec, HttpContext.RequestAborted);
+        return Ok(new { success = true, message = $"Slewing to RA={request.RA:F4}, Dec={request.Dec:F4}", ra = request.RA, dec = request.Dec });
     }
 
     [HttpPost("slewAltAz")]
@@ -182,24 +202,23 @@ public class TelescopeController : ControllerBase
     [HttpPost("park")]
     public async Task<IActionResult> Park()
     {
-        var success = await _state.TelescopeMediator.ParkTelescope(new Progress<ApplicationStatus>(), CancellationToken.None);
-        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
-
-        if (!success)
-        {
-            return StatusCode(500, new { success = false, message = "Failed to park telescope" });
-        }
-
-        return Ok(new
-        {
-            success = true,
-            message = "Park requested"
-        });
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        await _indi.TelescopeParkAsync(selected.UniqueId, true, HttpContext.RequestAborted);
+        return Ok(new { success = true, message = "Park requested" });
     }
 
     [HttpPost("unpark")]
     public async Task<IActionResult> Unpark()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (_equipment.IsConnected(DeviceKind.Telescope) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            await _indi.TelescopeParkAsync(selected.UniqueId, false, HttpContext.RequestAborted);
+            return Ok(new { success = true, message = "Unpark requested" });
+        }
+
         var success = await _state.TelescopeMediator.UnparkTelescope(new Progress<ApplicationStatus>(), CancellationToken.None);
         _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
 
@@ -216,87 +235,112 @@ public class TelescopeController : ControllerBase
     }
 
     [HttpPost("tracking")]
-    public IActionResult SetTracking([FromBody] TrackingRequest request)
+    public async Task<IActionResult> SetTracking([FromBody] TrackingRequest request)
     {
-        var success = _state.TelescopeMediator.SetTrackingEnabled(request.Enabled);
-        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        await _indi.TelescopeTrackingAsync(selected.UniqueId, request.Enabled, HttpContext.RequestAborted);
+        return Ok(new { success = true, message = request.Enabled ? "Tracking enabled" : "Tracking disabled", enabled = request.Enabled });
+    }
 
-        if (!success)
-        {
-            return StatusCode(500, new { success = false, message = "Failed to change tracking state" });
-        }
+    public record TrackRateRequest(string Rate);
 
-        return Ok(new
-        {
-            success = true,
-            message = request.Enabled ? "Tracking enabled" : "Tracking disabled",
-            enabled = request.Enabled
+    /// <summary>Pick the tracking rate used when tracking is on. Values: sidereal (default for
+    /// deep-sky), solar, lunar, custom. Drivers vary; push-to mounts may omit the vector.</summary>
+    [HttpPost("trackRate")]
+    public async Task<IActionResult> SetTrackRate([FromBody] TrackRateRequest request)
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        var ok = await _indi.TelescopeTrackRateAsync(selected.UniqueId, request.Rate ?? "sidereal", HttpContext.RequestAborted);
+        return Ok(new {
+            success = ok,
+            rate = request.Rate,
+            message = ok ? null : "이 마운트 드라이버는 tracking rate 선택을 지원하지 않습니다."
         });
+    }
+
+    public record SyncRequest(double RA, double Dec);
+
+    /// <summary>Sync the mount's internal position to the given RA/Dec. Used after a plate-solve
+    /// to tell the mount "you are actually here" without moving. Follow-on slews then calibrate
+    /// from the corrected origin. Coordinate convention matches /slew: RA in degrees (0-360),
+    /// Dec in degrees (-90..+90).</summary>
+    [HttpPost("sync")]
+    public async Task<IActionResult> Sync([FromBody] SyncRequest request)
+    {
+        if (request.RA < 0 || request.RA >= 360)
+            return BadRequest(new { success = false, message = "RA must be between 0 and 360 degrees" });
+        if (request.Dec < -90 || request.Dec > 90)
+            return BadRequest(new { success = false, message = "Dec must be between -90 and 90 degrees" });
+
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        if (_indi.IsTelescopeParked(selected.UniqueId))
+            return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
+
+        await _indi.TelescopeSyncAsync(selected.UniqueId, request.RA / 15.0, request.Dec, HttpContext.RequestAborted);
+        return Ok(new { success = true, message = $"Synced to RA={request.RA:F4}, Dec={request.Dec:F4}" });
     }
 
     [HttpPost("move")]
     public async Task<IActionResult> Move([FromBody] MoveRequest request)
     {
         var validDirections = new[] { "N", "S", "E", "W" };
-        if (!validDirections.Contains(request.Direction, StringComparer.OrdinalIgnoreCase))
-        {
+        var dir = request.Direction.ToUpperInvariant();
+        if (!validDirections.Contains(dir))
             return BadRequest(new { success = false, message = "Direction must be N, S, E, or W" });
-        }
 
-        if (!TryResolveAxisAndRate(request.Direction, request.Rate, out var axis, out var rate))
-        {
-            return BadRequest(new { success = false, message = "Direction must be N, S, E, or W" });
-        }
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        if (_indi.IsTelescopeParked(selected.UniqueId))
+            return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
 
-        _state.TelescopeMediator.MoveAxis(axis, rate);
-        if (request.Duration > 0)
-        {
-            await Task.Delay(request.Duration);
-            _state.TelescopeMediator.MoveAxis(axis, 0);
-        }
+        var dirName = dir switch { "N" => "north", "S" => "south", "E" => "east", "W" => "west", _ => "north" };
 
-        return Ok(new
+        // Interpret `rate` as a sidereal multiplier (1x = sidereal tracking speed). Values ≤ 1
+        // or absent fall back to the driver's current selection (usually max). The driver's
+        // TELESCOPE_SLEW_RATE OneOfMany switch caps at whatever the manufacturer exposes
+        // (AM5 = 1–10); anything higher clamps to the max element.
+        double? multiplier = request.Rate >= 1.0 ? request.Rate : null;
+        await _indi.TelescopeMoveAsync(selected.UniqueId, dirName, multiplier, HttpContext.RequestAborted);
+
+        // If a duration is supplied (tap-to-nudge), sleep then stop. Otherwise keep moving until an
+        // explicit /stopMove call.
+        var duration = request.Duration > 0 ? request.Duration : 0;
+        if (duration > 0)
         {
-            success = true,
-            message = $"Moving {request.Direction} at rate {request.Rate} for {request.Duration}ms",
-            direction = request.Direction,
-            rate = request.Rate,
-            duration = request.Duration
-        });
+            await Task.Delay(duration);
+            await _indi.TelescopeStopMoveAsync(selected.UniqueId, HttpContext.RequestAborted);
+        }
+        return Ok(new { success = true, message = $"Moving {dir} for {duration}ms", direction = dir, duration });
     }
 
     [HttpPost("stopMove")]
-    public IActionResult StopMove()
+    public async Task<IActionResult> StopMove()
     {
-        var axes = Enum.GetValues<TelescopeAxes>();
-        foreach (var axis in axes)
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (_equipment.IsConnected(DeviceKind.Telescope) && selected?.Provider == EquipmentProvider.Indi)
         {
-            _state.TelescopeMediator.MoveAxis(axis, 0);
+            await _indi.TelescopeStopMoveAsync(selected.UniqueId, HttpContext.RequestAborted);
         }
-
-        return Ok(new
-        {
-            success = true,
-            message = "Movement stopped"
-        });
+        return Ok(new { success = true, message = "Movement stopped" });
     }
 
     [HttpPost("home")]
     public async Task<IActionResult> Home()
     {
-        var success = await _state.TelescopeMediator.FindHome(new Progress<ApplicationStatus>(), CancellationToken.None);
-        _state.NotifyStateChanged("telescope", _state.BuildTelescopeStatus());
-
-        if (!success)
-        {
-            return StatusCode(500, new { success = false, message = "Failed to find home position" });
-        }
-
-        return Ok(new
-        {
-            success = true,
-            message = "Home requested"
-        });
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        if (_indi.IsTelescopeParked(selected.UniqueId))
+            return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
+        await _indi.TelescopeFindHomeAsync(selected.UniqueId, HttpContext.RequestAborted);
+        return Ok(new { success = true, message = "Home requested" });
     }
 
     [HttpGet("axisRates")]

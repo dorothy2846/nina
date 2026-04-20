@@ -494,6 +494,68 @@ public class IndiDiscoveryService : BackgroundService
             new[] { ("TRACK_ON", enabled), ("TRACK_OFF", !enabled) }, ct);
     }
 
+    /// <summary>Select tracking rate — one of sidereal/solar/lunar/custom. INDI's
+    /// TELESCOPE_TRACK_MODE is a OneOfMany switch with well-known elements
+    /// <c>TRACK_SIDEREAL</c> / <c>TRACK_SOLAR</c> / <c>TRACK_LUNAR</c> / <c>TRACK_CUSTOM</c>.
+    /// Returns false when the driver omits the vector (some push-to mounts don't expose it).</summary>
+    public async Task<bool> TelescopeTrackRateAsync(string deviceName, string rate, CancellationToken ct)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null || !dev.Properties.ContainsKey("TELESCOPE_TRACK_MODE")) return false;
+
+        var element = rate.ToLowerInvariant() switch
+        {
+            "sidereal" => "TRACK_SIDEREAL",
+            "solar" => "TRACK_SOLAR",
+            "lunar" => "TRACK_LUNAR",
+            "custom" => "TRACK_CUSTOM",
+            _ => null
+        };
+        if (element == null) return false;
+
+        await client.SetSwitchManyAsync(deviceName, "TELESCOPE_TRACK_MODE",
+            new[] { ("TRACK_SIDEREAL", element == "TRACK_SIDEREAL"),
+                    ("TRACK_SOLAR",    element == "TRACK_SOLAR"),
+                    ("TRACK_LUNAR",    element == "TRACK_LUNAR"),
+                    ("TRACK_CUSTOM",   element == "TRACK_CUSTOM") }, ct);
+        return true;
+    }
+
+    /// <summary>Sync the mount's internal position to a given RA/Dec without physically
+    /// slewing. Used after plate-solve to correct pointing errors. Flow: flip
+    /// <c>ON_COORD_SET</c> from SLEW/TRACK to SYNC, publish the coordinate, flip it
+    /// back so the next <c>TelescopeSlewAsync</c> slews again instead of syncing.</summary>
+    public async Task TelescopeSyncAsync(string deviceName, double raHours, double decDegrees, CancellationToken ct)
+    {
+        var client = _client;
+        if (client == null) return;
+
+        await client.SetSwitchManyAsync(deviceName, "ON_COORD_SET",
+            new[] { ("SYNC", true), ("SLEW", false), ("TRACK", false) }, ct);
+        try
+        {
+            await client.SendAsync(
+                $"<newNumberVector device=\"{EscapeXml(deviceName)}\" name=\"EQUATORIAL_EOD_COORD\">" +
+                $"<oneNumber name=\"RA\">{raHours.ToString(System.Globalization.CultureInfo.InvariantCulture)}</oneNumber>" +
+                $"<oneNumber name=\"DEC\">{decDegrees.ToString(System.Globalization.CultureInfo.InvariantCulture)}</oneNumber>" +
+                $"</newNumberVector>", ct);
+        }
+        finally
+        {
+            // Restore default "slew and track" behaviour so the next coordinate publish
+            // slews instead of re-syncing. Every subsequent slew would otherwise be a
+            // sync, which is a footgun that has cost at least one three-hour session.
+            try
+            {
+                await client.SetSwitchManyAsync(deviceName, "ON_COORD_SET",
+                    new[] { ("SYNC", false), ("SLEW", false), ("TRACK", true) }, ct);
+            }
+            catch { /* best effort */ }
+        }
+    }
+
     public async Task TelescopeParkAsync(string deviceName, bool park, CancellationToken ct)
     {
         var client = _client;

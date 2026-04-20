@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using NINA.Equipment.Interfaces;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Headless.Models;
+using NINA.Headless.Services;
 
 namespace NINA.Headless.Controllers;
 
@@ -10,10 +11,16 @@ namespace NINA.Headless.Controllers;
 public class DomeController : ControllerBase
 {
     private readonly IDomeMediator _dome;
+    private readonly EquipmentSelectionService _equipment;
+    private readonly IndiDiscoveryService _indi;
+    private readonly AlpacaClient _alpaca;
 
-    public DomeController(IDomeMediator dome)
+    public DomeController(IDomeMediator dome, EquipmentSelectionService equipment, IndiDiscoveryService indi, AlpacaClient alpaca)
     {
         _dome = dome;
+        _equipment = equipment;
+        _indi = indi;
+        _alpaca = alpaca;
     }
 
     [HttpGet("info")]
@@ -60,31 +67,17 @@ public class DomeController : ControllerBase
     }
 
     [HttpPost("connect")]
-    public async Task<IActionResult> Connect([FromBody] ConnectRequest? request)
-    {
-        var success = await _dome.Connect();
-        if (!success)
-        {
-            return StatusCode(503, new { success = false, message = "Failed to connect dome", deviceId = request?.DeviceId ?? "default" });
-        }
-
-        return Ok(new
-        {
-            success = true,
-            message = "Dome connected",
-            deviceId = request?.DeviceId ?? "default"
-        });
-    }
+    public Task<IActionResult> Connect([FromBody] ConnectRequest? request) =>
+        IndiDeviceConnectFlow.ConnectAsync(_equipment, _indi, DeviceKind.Dome, "Dome", request, HttpContext.RequestAborted, _alpaca);
 
     [HttpPost("disconnect")]
     public async Task<IActionResult> Disconnect()
     {
-        await _dome.Disconnect();
-        return Ok(new
-        {
-            success = true,
-            message = "Dome disconnected"
-        });
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (selected?.Provider == EquipmentProvider.Indi)
+            await _indi.DisconnectDeviceAsync(selected.UniqueId, HttpContext.RequestAborted);
+        _equipment.Disconnect(DeviceKind.Dome);
+        return Ok(new { success = true, message = "Dome disconnected" });
     }
 
     [HttpPost("open")]
@@ -133,6 +126,20 @@ public class DomeController : ControllerBase
             success = true,
             message = "Dome parked"
         });
+    }
+
+    /// <summary>Emergency stop — halt any in-flight shutter move or azimuth slew. Different
+    /// from /park (which parks + closes shutter) or /close (shutter only). Backs onto the
+    /// underlying IDome.StopAll() so we cover both motors.</summary>
+    [HttpPost("halt")]
+    public async Task<IActionResult> Halt()
+    {
+        if (_dome.GetDevice() is IDome device)
+        {
+            await device.StopAll();
+            return Ok(new { success = true, message = "Dome halted" });
+        }
+        return StatusCode(503, new { success = false, message = "Dome not connected" });
     }
 
     [HttpPost("home")]
