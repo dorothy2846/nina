@@ -45,6 +45,7 @@ builder.Services.AddSingleton<EquipmentSelectionService>();
 builder.Services.AddSingleton<CameraSelectionService>();
 builder.Services.AddSingleton<AlpacaClient>();
 builder.Services.AddSingleton<AutoCalibrationOrchestrator>();
+builder.Services.AddSingleton<SystemUpdateService>();
 
 // AP-mode provider selection — Linux (production) uses nmcli; macOS (dev only)
 // returns an unsupported stub. WifiFallbackOrchestrator then auto-enters AP mode
