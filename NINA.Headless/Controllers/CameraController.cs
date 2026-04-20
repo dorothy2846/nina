@@ -60,10 +60,8 @@ public class CameraController : ControllerBase
         {
             canSetTemperature = info.CanSetTemperature,
             canAbort = indiName != null && _indi.DeviceHasProperty(indiName, "CCD_ABORT_EXPOSURE"),
-            hasDewHeater = indiName != null && (
-                _indi.DeviceHasProperty(indiName, "CCD_DEW_CONTROL") ||
-                _indi.DeviceHasProperty(indiName, "AUX_HEATER_TOGGLE") ||
-                _indi.DeviceHasProperty(indiName, "ANTI_DEW")),
+            hasDewHeater = indiName != null && _indi.DeviceHasAnyProperty(indiName,
+                "CCD_DEW_CONTROL", "AUX_HEATER_TOGGLE", "ANTI_DEW"),
             hasOffset = indiName != null && _indi.DeviceHasProperty(indiName, "CCD_OFFSET"),
             hasGain = indiName != null && _indi.DeviceHasProperty(indiName, "CCD_GAIN")
         };
@@ -77,7 +75,6 @@ public class CameraController : ControllerBase
             gain = info.Gain,
             offset = info.Offset,
             binning = info.BinX,
-            // Legacy — new iOS reads capabilities.canSetTemperature instead.
             canSetTemperature = info.CanSetTemperature,
             sensorType = info.SensorType.ToString(),
             bitDepth = info.BitDepth,

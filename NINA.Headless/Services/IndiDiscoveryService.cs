@@ -375,6 +375,20 @@ public class IndiDiscoveryService : BackgroundService
         return dev != null && dev.Properties.ContainsKey(property);
     }
 
+    /// <summary>True if the device exposes any of the given property names. Convenience
+    /// for capabilities that drivers publish under several vector names (camera dew
+    /// heater = CCD_DEW_CONTROL / AUX_HEATER_TOGGLE / ANTI_DEW, focuser backlash =
+    /// FOCUS_BACKLASH_STEPS / FOCUS_BACKLASH_TOGGLE).</summary>
+    public bool DeviceHasAnyProperty(string deviceName, params string[] properties)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return false;
+        foreach (var p in properties) if (dev.Properties.ContainsKey(p)) return true;
+        return false;
+    }
+
     /// <summary>Current focuser absolute position, or null if the driver hasn't emitted
     /// ABS_FOCUS_POSITION yet. Used by filter change to compute offset-adjusted targets.</summary>
     public int? GetFocuserPosition(string deviceName)

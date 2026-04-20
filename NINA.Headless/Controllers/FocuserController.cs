@@ -80,8 +80,10 @@ public class FocuserController : ControllerBase
         var capabilities = new
         {
             hasTemperature = indiName != null && _indi.DeviceHasProperty(indiName, "FOCUS_TEMPERATURE"),
-            hasTempCompensation = indiName != null && (_indi.DeviceHasProperty(indiName, "FOCUS_TEMPERATURE_COMPENSATION") || _indi.DeviceHasProperty(indiName, "AUTO_FOCUS_COMP")),
-            hasBacklash = indiName != null && (_indi.DeviceHasProperty(indiName, "FOCUS_BACKLASH_STEPS") || _indi.DeviceHasProperty(indiName, "FOCUS_BACKLASH_TOGGLE"))
+            hasTempCompensation = indiName != null && _indi.DeviceHasAnyProperty(indiName,
+                "FOCUS_TEMPERATURE_COMPENSATION", "AUTO_FOCUS_COMP"),
+            hasBacklash = indiName != null && _indi.DeviceHasAnyProperty(indiName,
+                "FOCUS_BACKLASH_STEPS", "FOCUS_BACKLASH_TOGGLE")
         };
 
         return Ok(new
