@@ -244,6 +244,30 @@ def collect_core_drivers(indi_root: Path) -> list[dict]:
     return out
 
 
+def _collect_flat_dir(root: Path, category: str) -> list[dict]:
+    """Scan a directory laid out like libindi's core category dirs — one
+    .cpp+.h pair per driver, at the top level. Used for community repos
+    (e.g. astroberry-diy) that ship drivers loose."""
+    out = []
+    if not root.exists():
+        return out
+    for cpp in sorted(root.glob("*.cpp")):
+        header = cpp.with_suffix(".h")
+        combined = ""
+        for f in (header, cpp):
+            if f.exists():
+                try: combined += f.read_text(encoding="utf-8", errors="ignore")
+                except Exception: pass
+        if not CLASS_INHERIT_RE.search(combined):
+            continue
+        info = _analyze_files([cpp, header])
+        stem = cpp.stem
+        display = stem.replace("_", " ")
+        binary = f"indi_{stem}"
+        out.append(build_row(display, binary, category, info, source="community"))
+    return out
+
+
 def _analyze_files(files: list[Path]) -> dict:
     """Same shape as analyze_driver_dir() but for an explicit file list."""
     bases: set[str] = set()
@@ -379,6 +403,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--indi", required=True, type=Path, help="libindi source tree")
     ap.add_argument("--indi-3rdparty", type=Path, default=None, help="indi-3rdparty source tree")
+    ap.add_argument("--extra-flat", type=Path, action="append", default=[],
+                    help="Additional flat driver-file root (repeat for many). Format matches "
+                         "libindi core category dirs — one .cpp+.h pair per driver. "
+                         "e.g. --extra-flat /tmp/indi-source/astroberry-diy")
     ap.add_argument("--out", type=Path, required=True, help="Output JSON path")
     args = ap.parse_args()
 
@@ -386,6 +414,8 @@ def main():
     rows.extend(collect_core_drivers(args.indi))
     if args.indi_3rdparty:
         rows.extend(collect_3rdparty_drivers(args.indi_3rdparty))
+    for extra in args.extra_flat:
+        rows.extend(_collect_flat_dir(extra, category="community"))
 
     # De-dupe by binary (core + 3rdparty sometimes ship the same name).
     seen: dict[str, dict] = {}
