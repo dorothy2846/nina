@@ -701,14 +701,37 @@ public class CameraController : ControllerBase
     }
 
     [HttpPost("abort")]
-    public IActionResult Abort()
+    public async Task<IActionResult> Abort()
     {
-        _state.CameraMediator.AbortExposure();
-
-        return Ok(new
+        var selected = _cameraSelection.GetSelected();
+        if (_cameraSelection.IsConnected && selected?.Provider == CameraProvider.Indi)
         {
-            success = true,
-            message = "Capture aborted"
+            var ok = await _indi.AbortExposureAsync(selected.UniqueId, HttpContext.RequestAborted);
+            return Ok(new { success = ok, message = ok ? "Capture aborted" : "Driver doesn't expose CCD_ABORT_EXPOSURE" });
+        }
+
+        _state.CameraMediator.AbortExposure();
+        return Ok(new { success = true, message = "Capture aborted" });
+    }
+
+    public record DewHeaterRequest(bool Enabled, int? PowerPercent);
+
+    /// <summary>Dew heater control. Driver coverage is patchy (INDI's CCD_DEW_CONTROL,
+    /// AUX_HEATER_TOGGLE, or ZWO's ANTI_DEW) — IndiDiscoveryService picks whichever the
+    /// active camera exposes. Returns <c>success=false</c> when the driver has none of
+    /// them so the UI can surface "not supported" rather than silently pretending.</summary>
+    [HttpPost("dew-heater")]
+    public async Task<IActionResult> SetDewHeater([FromBody] DewHeaterRequest request)
+    {
+        var selected = _cameraSelection.GetSelected();
+        if (!_cameraSelection.IsConnected || selected?.Provider != CameraProvider.Indi)
+            return BadRequest(new { success = false, message = "Camera not connected via INDI" });
+
+        var ok = await _indi.SetDewHeaterAsync(selected.UniqueId, request.Enabled,
+            request.PowerPercent, HttpContext.RequestAborted);
+        return Ok(new {
+            success = ok,
+            message = ok ? null : "이 카메라 드라이버는 dew heater 제어를 지원하지 않습니다."
         });
     }
 

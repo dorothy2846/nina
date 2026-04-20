@@ -108,6 +108,41 @@ public class FocuserController : ControllerBase
         return Ok(new { success = true, message = "Halted" });
     }
 
+    public record TempCompRequest(bool Enabled);
+
+    [HttpPost("temp-compensation")]
+    public async Task<IActionResult> SetTempCompensation([FromBody] TempCompRequest request)
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        if (!_equipment.IsConnected(DeviceKind.Focuser) || selected?.Provider != EquipmentProvider.Indi)
+            return BadRequest(new { success = false, message = "Focuser not connected via INDI" });
+
+        var ok = await _indi.SetFocuserTempCompensationAsync(selected.UniqueId, request.Enabled, HttpContext.RequestAborted);
+        return Ok(new {
+            success = ok,
+            message = ok ? null : "이 focuser 드라이버는 온도 보상을 지원하지 않습니다."
+        });
+    }
+
+    public record BacklashRequest(int Steps);
+
+    /// <summary>Push driver-level backlash compensation. Per-filter focus offsets and
+    /// autofocus passes rely on this to reverse direction cleanly. <c>steps=0</c>
+    /// disables.</summary>
+    [HttpPost("backlash")]
+    public async Task<IActionResult> SetBacklash([FromBody] BacklashRequest request)
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Focuser);
+        if (!_equipment.IsConnected(DeviceKind.Focuser) || selected?.Provider != EquipmentProvider.Indi)
+            return BadRequest(new { success = false, message = "Focuser not connected via INDI" });
+
+        var ok = await _indi.SetFocuserBacklashAsync(selected.UniqueId, Math.Max(0, request.Steps), HttpContext.RequestAborted);
+        return Ok(new {
+            success = ok,
+            message = ok ? null : "이 focuser 드라이버는 backlash 설정을 지원하지 않습니다."
+        });
+    }
+
     [HttpPost("autofocus/start")]
     public IActionResult StartAutoFocus()
     {

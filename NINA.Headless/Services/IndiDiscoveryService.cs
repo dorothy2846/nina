@@ -364,6 +364,16 @@ public class IndiDiscoveryService : BackgroundService
         return (alt, az);
     }
 
+    /// <summary>Current focuser absolute position, or null if the driver hasn't emitted
+    /// ABS_FOCUS_POSITION yet. Used by filter change to compute offset-adjusted targets.</summary>
+    public int? GetFocuserPosition(string deviceName)
+    {
+        var dev = FindByName(deviceName);
+        if (dev == null || !dev.Properties.TryGetValue("ABS_FOCUS_POSITION", out var p)) return null;
+        var v = p["FOCUS_ABSOLUTE_POSITION"]?.AsDouble;
+        return v.HasValue ? (int)v.Value : null;
+    }
+
     public object? BuildFocuserStatus(string deviceName)
     {
         var dev = FindByName(deviceName);
@@ -521,6 +531,59 @@ public class IndiDiscoveryService : BackgroundService
         var client = _client;
         if (client == null) return Task.CompletedTask;
         return client.SetSwitchAsync(deviceName, "TELESCOPE_ABORT_MOTION", "ABORT", true, ct);
+    }
+
+    /// <summary>Abort a running CCD exposure. INDI standard vector is
+    /// <c>CCD_ABORT_EXPOSURE</c> with a single <c>ABORT</c> element — drivers either
+    /// also honour the legacy <c>CCD1.CCD_ABORT_EXPOSURE</c> form or expose nothing;
+    /// we try both. Returns true when at least one succeeded.</summary>
+    public async Task<bool> AbortExposureAsync(string deviceName, CancellationToken ct)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return false;
+
+        if (dev.Properties.ContainsKey("CCD_ABORT_EXPOSURE"))
+        {
+            await client.SetSwitchAsync(deviceName, "CCD_ABORT_EXPOSURE", "ABORT", true, ct);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Enable / disable the camera's dew heater. Driver variance is wide:
+    /// some expose <c>CCD_DEW_CONTROL</c> (on/off switch), some expose
+    /// <c>AUX_HEATER_TOGGLE</c>, and ZWO-style drivers use a number element under
+    /// <c>ANTI_DEW</c> with intensity 0–100. We try each in order and return true
+    /// as soon as one sticks.</summary>
+    public async Task<bool> SetDewHeaterAsync(string deviceName, bool on, int? powerPercent, CancellationToken ct)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return false;
+
+        if (dev.Properties.ContainsKey("CCD_DEW_CONTROL"))
+        {
+            await client.SetSwitchManyAsync(deviceName, "CCD_DEW_CONTROL",
+                new[] { ("INDI_ENABLED", on), ("INDI_DISABLED", !on) }, ct);
+            return true;
+        }
+        if (dev.Properties.ContainsKey("AUX_HEATER_TOGGLE"))
+        {
+            await client.SetSwitchManyAsync(deviceName, "AUX_HEATER_TOGGLE",
+                new[] { ("INDI_ENABLED", on), ("INDI_DISABLED", !on) }, ct);
+            return true;
+        }
+        // ZWO ASI: ANTI_DEW number vector, 0 = off, 1-100 = heater power.
+        if (dev.Properties.ContainsKey("ANTI_DEW"))
+        {
+            var value = on ? (powerPercent ?? 50) : 0;
+            await client.SetNumberAsync(deviceName, "ANTI_DEW", "ANTI_DEW_VALUE", value, ct);
+            return true;
+        }
+        return false;
     }
 
     /// <summary>Start an axis motion. <paramref name="direction"/> ∈ north/south/east/west.
@@ -763,6 +826,82 @@ public class IndiDiscoveryService : BackgroundService
             return true;
         }
         return false;
+    }
+
+    /// <summary>Enable / disable the focuser's on-board temperature compensation.
+    /// INDI spec vector is <c>FOCUS_TEMPERATURE_COMPENSATION</c> with an INDI_ENABLED /
+    /// INDI_DISABLED pair — older drivers sometimes use <c>AUTO_FOCUS_COMP</c>. Returns
+    /// false when the driver exposes neither so the controller can report "not supported".</summary>
+    public async Task<bool> SetFocuserTempCompensationAsync(string deviceName, bool on, CancellationToken ct)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return false;
+
+        if (dev.Properties.ContainsKey("FOCUS_TEMPERATURE_COMPENSATION"))
+        {
+            await client.SetSwitchManyAsync(deviceName, "FOCUS_TEMPERATURE_COMPENSATION",
+                new[] { ("INDI_ENABLED", on), ("INDI_DISABLED", !on) }, ct);
+            return true;
+        }
+        if (dev.Properties.ContainsKey("AUTO_FOCUS_COMP"))
+        {
+            await client.SetSwitchManyAsync(deviceName, "AUTO_FOCUS_COMP",
+                new[] { ("INDI_ENABLED", on), ("INDI_DISABLED", !on) }, ct);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Configure driver-level backlash compensation. <paramref name="steps"/>
+    /// is the overshoot amount (0 disables). INDI standard is two vectors:
+    /// <c>FOCUS_BACKLASH_TOGGLE</c> (on/off switch) + <c>FOCUS_BACKLASH_STEPS</c> (number).
+    /// When the driver supports it we prefer this over software backlash in NINA
+    /// because the driver knows the last direction and can act on moves it initiated
+    /// internally (autofocus, filter offsets, etc.).</summary>
+    public async Task<bool> SetFocuserBacklashAsync(string deviceName, int steps, CancellationToken ct)
+    {
+        var client = _client;
+        if (client == null) return false;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return false;
+
+        var hasToggle = dev.Properties.ContainsKey("FOCUS_BACKLASH_TOGGLE");
+        var hasSteps = dev.Properties.ContainsKey("FOCUS_BACKLASH_STEPS");
+        if (!hasToggle && !hasSteps) return false;
+
+        if (hasToggle)
+        {
+            await client.SetSwitchManyAsync(deviceName, "FOCUS_BACKLASH_TOGGLE",
+                new[] { ("INDI_ENABLED", steps > 0), ("INDI_DISABLED", steps <= 0) }, ct);
+        }
+        if (hasSteps && steps > 0)
+        {
+            await client.SetNumberAsync(deviceName, "FOCUS_BACKLASH_STEPS",
+                "FOCUS_BACKLASH_VALUE", steps, ct);
+        }
+        return true;
+    }
+
+    /// <summary>Status envelope for the flat panel. Matches iOS FlatPanelStatusResponse —
+    /// brightness is null when the driver doesn't expose FLAT_LIGHT_INTENSITY.</summary>
+    public object BuildFlatPanelStatus(EquipmentDescriptor selected)
+    {
+        var client = _client;
+        int? brightness = null;
+        if (client != null)
+        {
+            var dev = client.GetDevice(selected.UniqueId);
+            if (dev != null && dev.Properties.TryGetValue("FLAT_LIGHT_INTENSITY", out var prop)
+                && prop.Elements.TryGetValue("FLAT_LIGHT_INTENSITY_VALUE", out var elem)
+                && double.TryParse(elem.Value, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var v))
+            {
+                brightness = (int)Math.Round(v);
+            }
+        }
+        return new { connected = true, name = selected.Name, brightness };
     }
 
     // ----- Switch (powerbox / relay board) -----

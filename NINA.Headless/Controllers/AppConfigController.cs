@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using NINA.Headless.Services;
 
 namespace NINA.Headless.Controllers;
 
@@ -7,6 +8,15 @@ namespace NINA.Headless.Controllers;
 public class AppConfigController : ControllerBase
 {
     private static readonly object SyncRoot = new();
+
+    private readonly CameraSelectionService _cameraSelection;
+    private readonly IndiDiscoveryService _indi;
+
+    public AppConfigController(CameraSelectionService cameraSelection, IndiDiscoveryService indi)
+    {
+        _cameraSelection = cameraSelection;
+        _indi = indi;
+    }
 
     private static CameraSettingsDto CameraSettings = new();
     private static FocuserSettingsDto FocuserSettings = new();
@@ -20,6 +30,17 @@ public class AppConfigController : ControllerBase
     {
         Filters = []
     };
+
+    /// <summary>Snapshot of the current filter settings for other controllers
+    /// (FilterWheelController uses this to honor per-filter focus offsets). Returns a
+    /// shallow copy so callers can't mutate the authoritative store.</summary>
+    internal static FilterSettingsItemDto? GetFilterSetting(int position)
+    {
+        lock (SyncRoot)
+        {
+            return FilterWheelSettings.Filters.FirstOrDefault(f => f.Position == position);
+        }
+    }
 
     private static readonly List<ProfileInfoDto> Profiles =
     [
@@ -40,9 +61,37 @@ public class AppConfigController : ControllerBase
     public IActionResult GetCameraSettings() => Ok(CameraSettings);
 
     [HttpPut("camera/settings")]
-    public IActionResult UpdateCameraSettings([FromBody] CameraSettingsDto request)
+    public async Task<IActionResult> UpdateCameraSettings([FromBody] CameraSettingsDto request)
     {
-        lock (SyncRoot) CameraSettings = request;
+        CameraSettingsDto previous;
+        lock (SyncRoot)
+        {
+            previous = CameraSettings;
+            CameraSettings = request;
+        }
+
+        // If an INDI camera is the current target, forward the changed fields to the driver.
+        var selected = _cameraSelection.GetSelected();
+        if (_cameraSelection.IsConnected && selected?.Provider == CameraProvider.Indi)
+        {
+            var ct = HttpContext.RequestAborted;
+            try
+            {
+                if (request.Gain.HasValue && request.Gain != previous.Gain)
+                    await _indi.SetGainAsync(selected.UniqueId, request.Gain.Value, ct);
+
+                if (request.Offset.HasValue && request.Offset != previous.Offset)
+                    await _indi.SetOffsetAsync(selected.UniqueId, request.Offset.Value, ct);
+
+                if (request.Binning.HasValue && request.Binning != previous.Binning)
+                    await _indi.SetBinningAsync(selected.UniqueId, request.Binning.Value, request.Binning.Value, ct);
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { success = false, message = $"INDI apply failed: {ex.Message}" });
+            }
+        }
+
         return Ok(new { success = true, message = "Camera settings updated" });
     }
 
