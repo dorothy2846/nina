@@ -51,6 +51,8 @@ class IOptronEmulator(ProtocolEmulator):
         if cmd == b"MountInfo":     return self.mount_info
         if cmd == b"FW1":           return b"160610160610"      # FW date MMDDYY × 2
         if cmd == b"FW2":           return b"160610160610"
+        # ZEQ25 driver hand-parses response against exact string "V1.00#".
+        # Other iOptron drivers accept anything ending in '#'.
         if cmd == b"V":             return b"V1.00#"
 
         # Position

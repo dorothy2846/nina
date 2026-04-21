@@ -32,10 +32,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from protocol_emulator import SerialBridge  # noqa: E402
 from protocols.lx200 import LX200Emulator  # noqa: E402
+from protocols.lx200ap import LX200APEmulator  # noqa: E402
 from protocols.nexstar import NexStarEmulator  # noqa: E402
 from protocols.moonlite import MoonliteEmulator  # noqa: E402
 from protocols.ioptron import IOptronEmulator  # noqa: E402
 from protocols.myfocuserpro2 import MyFocuserPro2Emulator  # noqa: E402
+from protocols.generic_focuser import GenericFocuserEmulator  # noqa: E402
 
 
 # Driver → protocol emulator mapping. Each entry covers every INDI driver
@@ -43,7 +45,12 @@ from protocols.myfocuserpro2 import MyFocuserPro2Emulator  # noqa: E402
 # Substring match: indi_lx200basic, indi_lx200am5, indi_lx200_OnStep etc.
 # all handled by the one LX200 emulator.
 PROTOCOL_MAP: list[tuple[str, type]] = [
-    # LX200 family — every generic-goto mount ever made
+    # Specific-before-general: first substring match wins, so vendor-
+    # specific LX200 variants must be listed BEFORE the bare "lx200" key.
+    ("lx200ap",         LX200APEmulator),
+    ("lx200zeq25",      IOptronEmulator),
+    ("lx200gotonova",   IOptronEmulator),
+    # Generic LX200 family
     ("lx200",           LX200Emulator),
     ("am5",             LX200Emulator),
     ("OnStep",          LX200Emulator),
@@ -51,26 +58,32 @@ PROTOCOL_MAP: list[tuple[str, type]] = [
     ("TeenAstro",       LX200Emulator),
     ("pegasus_nyx",     LX200Emulator),
     ("autostar",        LX200Emulator),
-    # NexStar family — Celestron hand-controller + AUX protocol
+    # NexStar family
     ("celestron_gps",   NexStarEmulator),
     ("celestrongps",    NexStarEmulator),
     ("nexstarevo",      NexStarEmulator),
     ("celestronaux",    NexStarEmulator),
-    # Moonlite text protocol (hex position + temperature)
+    # Moonlite text protocol
     ("moonlite",        MoonliteEmulator),
     ("robofocus",       MoonliteEmulator),
     ("microtouch",      MoonliteEmulator),
-    # myFocuserPro2 numeric-coded protocol (Robert Brown DIY lineage)
+    # myFocuserPro2 numeric-coded protocol (just the real one now)
     ("myfocuserpro2",   MyFocuserPro2Emulator),
-    ("nfocus",          MyFocuserPro2Emulator),
-    ("onfocus",         MyFocuserPro2Emulator),
-    # iOptron mount family (iEQ / CEM / GEM / GotoNova / ZEQ)
+    # Everything else that looks like a serial focuser — generic catch-all.
+    ("aaf2",            GenericFocuserEmulator),
+    ("lakeside",        GenericFocuserEmulator),
+    ("microtouch",      GenericFocuserEmulator),
+    ("nfocus",          GenericFocuserEmulator),
+    ("nstep",           GenericFocuserEmulator),
+    ("onfocus",         GenericFocuserEmulator),
+    ("perfectstar",     GenericFocuserEmulator),
+    ("rbfocus",         GenericFocuserEmulator),
+    ("smartfocus",      GenericFocuserEmulator),
+    # iOptron mount family
     ("ieq_telescope",       IOptronEmulator),
     ("ieqlegacy_telescope", IOptronEmulator),
     ("ioptronv3_telescope", IOptronEmulator),
     ("ioptronHC8406",   IOptronEmulator),
-    ("lx200gotonova",   IOptronEmulator),
-    ("lx200zeq25",      IOptronEmulator),
 ]
 
 

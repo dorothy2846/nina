@@ -37,6 +37,9 @@ class MyFocuserPro2Emulator(ProtocolEmulator):
     # specific prefix letter doesn't matter to the driver (sscanf skips it),
     # but we emit the "canonical" ones for readability of a captured fixture.
     RESPONSES = {
+        # :03# is the handshake firmware-version query. Driver reads exactly
+        # 5 bytes; we emit 5-byte "F242#" (firmware 2.42).
+        b"03": (b"F",     242),
         b"00": (b"P",   42000),    # current position (mid-travel)
         b"01": (b"T",   42000),    # target position
         b"06": (b"M",   50000),    # max step
