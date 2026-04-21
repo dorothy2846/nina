@@ -34,6 +34,8 @@ from protocol_emulator import SerialBridge  # noqa: E402
 from protocols.lx200 import LX200Emulator  # noqa: E402
 from protocols.nexstar import NexStarEmulator  # noqa: E402
 from protocols.moonlite import MoonliteEmulator  # noqa: E402
+from protocols.ioptron import IOptronEmulator  # noqa: E402
+from protocols.myfocuserpro2 import MyFocuserPro2Emulator  # noqa: E402
 
 
 # Driver → protocol emulator mapping. Each entry covers every INDI driver
@@ -54,19 +56,21 @@ PROTOCOL_MAP: list[tuple[str, type]] = [
     ("celestrongps",    NexStarEmulator),
     ("nexstarevo",      NexStarEmulator),
     ("celestronaux",    NexStarEmulator),
-    # Moonlite + compatibles — cheap stepper focuser lingua franca
+    # Moonlite text protocol (hex position + temperature)
     ("moonlite",        MoonliteEmulator),
-    ("nstep",           MoonliteEmulator),
-    ("myfocuserpro2",   MoonliteEmulator),
-    ("nfocus",          MoonliteEmulator),
-    ("microtouch",      MoonliteEmulator),
-    ("lakeside",        MoonliteEmulator),
-    ("smartfocus",      MoonliteEmulator),
     ("robofocus",       MoonliteEmulator),
-    ("perfectstar",     MoonliteEmulator),
-    ("rbfocus",         MoonliteEmulator),
-    ("onfocus",         MoonliteEmulator),
-    ("aaf2",            MoonliteEmulator),
+    ("microtouch",      MoonliteEmulator),
+    # myFocuserPro2 numeric-coded protocol (Robert Brown DIY lineage)
+    ("myfocuserpro2",   MyFocuserPro2Emulator),
+    ("nfocus",          MyFocuserPro2Emulator),
+    ("onfocus",         MyFocuserPro2Emulator),
+    # iOptron mount family (iEQ / CEM / GEM / GotoNova / ZEQ)
+    ("ieq_telescope",       IOptronEmulator),
+    ("ieqlegacy_telescope", IOptronEmulator),
+    ("ioptronv3_telescope", IOptronEmulator),
+    ("ioptronHC8406",   IOptronEmulator),
+    ("lx200gotonova",   IOptronEmulator),
+    ("lx200zeq25",      IOptronEmulator),
 ]
 
 
@@ -104,8 +108,13 @@ def driver_env(bin_dir: Path) -> dict:
     return env
 
 
-def run_driver_test(driver_name: str, port: int, fixture_dir: Path | None) -> dict:
-    """Returns {driver, connected, property_count, capabilities, error}."""
+def run_driver_test(driver_name: str, port: int, fixture_dir: Path | None,
+                    per_driver_timeout: float = 20.0) -> dict:
+    """Returns {driver, connected, property_count, capabilities, error}.
+    Enforces a hard per-driver wall-clock budget — drivers that hang on
+    handshake (happens for sophisticated mounts whose protocol our emulator
+    doesn't fully satisfy) would otherwise freeze the whole suite."""
+    import signal as _signal
     emulator = pick_emulator(driver_name)
     if emulator is None:
         return {"driver": driver_name, "connected": False,
@@ -116,12 +125,19 @@ def run_driver_test(driver_name: str, port: int, fixture_dir: Path | None) -> di
     bin_dir = driver_bin_dir()
     env = driver_env(bin_dir)
 
+    # start_new_session puts indiserver + its spawned driver into their own
+    # process group so we can SIGKILL the whole tree, not just the parent.
+    # `preexec_fn=os.setsid` is the equivalent in older Python versions.
     indiserver = subprocess.Popen(
         ["indiserver", "-p", str(port), "-m", "200", driver_name],
         env=env,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        start_new_session=True,
     )
+    start_time = time.time()
+    def _deadline_exceeded() -> bool:
+        return time.time() - start_time > per_driver_timeout
 
     try:
         # Wait for indiserver to bind.
@@ -168,7 +184,7 @@ def run_driver_test(driver_name: str, port: int, fixture_dir: Path | None) -> di
             f"<oneSwitch name='CONNECT'>On</oneSwitch>"
             f"<oneSwitch name='DISCONNECT'>Off</oneSwitch>"
             f"</newSwitchVector>\n".encode())
-        post_connect = _drain(sock, 8.0, 500_000)
+        post_connect = _drain(sock, 3.0, 500_000, wall_clock_cap=12.0)
 
         full = initial + post_connect
         # Check CONNECTION state — Alert means handshake failed.
@@ -190,9 +206,15 @@ def run_driver_test(driver_name: str, port: int, fixture_dir: Path | None) -> di
             "emulator": emulator.__class__.name,
         }
     finally:
-        indiserver.terminate()
+        # Kill the whole process group — the driver child often doesn't die
+        # on parent SIGTERM if it's blocked in a read(). SIGKILL the group
+        # guarantees teardown so the next iteration doesn't collide on port.
+        try:
+            os.killpg(os.getpgid(indiserver.pid), _signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            pass
         try: indiserver.wait(timeout=2)
-        except subprocess.TimeoutExpired: indiserver.kill()
+        except subprocess.TimeoutExpired: pass
         bridge.stop()
 
 
@@ -232,11 +254,19 @@ def _connection_state_ok(buf: bytes) -> bool:
     return matches[-1].group(1) in (b"Ok", b"Idle")
 
 
-def _drain(sock: socket.socket, timeout: float, max_bytes: int) -> bytes:
+def _drain(sock: socket.socket, timeout: float, max_bytes: int,
+           wall_clock_cap: float | None = None) -> bytes:
+    """Read up to max_bytes, stopping when `timeout` seconds of recv-silence
+    pass OR `wall_clock_cap` total seconds elapse. The second bound protects
+    against chatty drivers that keep the drain alive forever by always
+    sending more bytes within the recv timeout window."""
     sock.settimeout(timeout)
     buf = b""
+    deadline = time.time() + wall_clock_cap if wall_clock_cap else None
     try:
         while len(buf) < max_bytes:
+            if deadline and time.time() >= deadline:
+                break
             chunk = sock.recv(4096)
             if not chunk: break
             buf += chunk
@@ -260,8 +290,11 @@ def main():
     ap.add_argument("--all", action="store_true", help="Test every driver with a mapped protocol")
     ap.add_argument("--fixture-dir", type=Path, default=None,
                     help="Save post-connect property dumps under this dir for regression use")
-    ap.add_argument("--port-base", type=int, default=18624)
+    ap.add_argument("--port-base", type=int, default=0,
+                    help="0 = auto-pick based on PID to avoid collisions across runs")
     args = ap.parse_args()
+    if args.port_base == 0:
+        args.port_base = 20000 + (os.getpid() % 10000)
 
     bin_dir = driver_bin_dir()
     all_drivers = sorted(p.name for p in bin_dir.glob("indi_*")
