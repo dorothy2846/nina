@@ -1,7 +1,6 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using NINA.Headless.Services.Network;
 
 namespace NINA.Headless.Services.Remote;
 
@@ -31,21 +30,22 @@ public class PairedDevicesFile
 /// Persistent list of iPhones paired to this observatory, stored alongside the
 /// identity in <c>paired_devices.json</c>. Each pair gets a random 32-byte
 /// bearer token; we keep only the SHA-256 hash so the file is inert if copied.
-/// Auto-approve logic gates the initial pair to either (a) observatory in AP
-/// mode — physical-proximity trust — or (b) empty pair list (appliance-fresh).
+/// Pairing is open to anyone who can reach the LAN — the observatory is a
+/// single-owner appliance and "you're on my WiFi" is the trust anchor. Earlier
+/// gates (AP mode OR empty list) locked owners out when they lost their token
+/// from outside the LAN; the simpler model also lets owners freely add a tablet
+/// or replace a phone without factory-reset.
 /// </summary>
 public class PairedDeviceStore
 {
     private readonly string _path;
     private readonly ILogger<PairedDeviceStore> _log;
-    private readonly IApModeProvider _ap;
     private readonly object _lock = new();
     private PairedDevicesFile _data;
 
-    public PairedDeviceStore(ILogger<PairedDeviceStore> log, IApModeProvider ap)
+    public PairedDeviceStore(ILogger<PairedDeviceStore> log)
     {
         _log = log;
-        _ap = ap;
         var dir = PlatformPaths.ConfigDir;
         Directory.CreateDirectory(dir);
         _path = Path.Combine(dir, "paired_devices.json");
@@ -149,25 +149,6 @@ public class PairedDeviceStore
     {
         lock (_lock) { _data.Devices.Clear(); Persist(); }
     }
-
-    /// <summary>Gate for the unauthenticated /pair endpoint. Allow iff the
-    /// observatory is currently hosting its AP (physical proximity trust) OR
-    /// we've never paired anyone before (appliance-fresh). Anything else
-    /// requires the remote admin flow (coming later).</summary>
-    public async Task<PairingEligibility> GetEligibilityAsync(CancellationToken ct)
-    {
-        var status = await _ap.GetStatusAsync(ct);
-        if (status.Active) return new(true, "ap-mode");
-
-        lock (_lock)
-        {
-            if (_data.Devices.Count(d => !d.Revoked) == 0)
-                return new(true, "no-paired-devices");
-        }
-        return new(false, "pairing-closed");
-    }
-
-    public record PairingEligibility(bool Allowed, string Reason);
 
     private static string Sha256Hex(byte[] bytes)
     {

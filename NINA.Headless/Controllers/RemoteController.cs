@@ -22,11 +22,15 @@ public class RemoteController : ControllerBase
     /// <summary>Unauthenticated metadata read-out. iOS calls this during LAN
     /// discovery to learn the stable machineId + identity pubkey + host OS,
     /// then passes the pubkey forward so later remote connections can verify
-    /// the observatory's identity via signed challenges.</summary>
+    /// the observatory's identity via signed challenges. Also returns the list
+    /// of currently paired devices (id + nickname + dates only — never the
+    /// token hash or pubkey) so the iPhone pairing UI can show the owner who
+    /// is already enrolled before they add another device.</summary>
     [HttpGet("config")]
     public IActionResult GetConfig()
     {
         var cfg = _store.Load();
+        var paired = _paired.ListActive();
         return Ok(new
         {
             machineId = cfg.MachineId,
@@ -35,7 +39,14 @@ public class RemoteController : ControllerBase
             publicKey = Convert.ToBase64String(_identity.PublicKey),
             platform = PlatformPaths.PlatformName,
             hostname = Environment.MachineName,
-            pairedCount = _paired.ListActive().Count
+            pairedCount = paired.Count,
+            pairedDevices = paired.Select(d => new
+            {
+                id = d.Id,
+                nickname = d.Nickname,
+                pairedAt = d.PairedAt,
+                lastSeenAt = d.LastSeenAt
+            })
         });
     }
 
@@ -57,25 +68,14 @@ public class RemoteController : ControllerBase
 
     public record PairRequest(string DeviceId, string Nickname, string PublicKey);
 
-    /// <summary>Initial pairing — open only while the observatory is hosting
-    /// its AP (physical proximity trust) or when no other device is paired
-    /// (appliance-fresh). Returns a bearer token that iOS must carry on every
-    /// subsequent authenticated call; the token never leaves the client again,
-    /// and the server keeps only its SHA-256 hash.</summary>
+    /// <summary>Initial pairing — single-owner LAN-trust model: anyone reachable
+    /// on the LAN may pair, since presence on the WiFi is itself the credential.
+    /// Returns a bearer token that iOS must carry on every subsequent
+    /// authenticated call; the token never leaves the client again, and the
+    /// server keeps only its SHA-256 hash.</summary>
     [HttpPost("pair")]
-    public async Task<IActionResult> Pair([FromBody] PairRequest req)
+    public IActionResult Pair([FromBody] PairRequest req)
     {
-        var eligibility = await _paired.GetEligibilityAsync(HttpContext.RequestAborted);
-        if (!eligibility.Allowed)
-        {
-            return StatusCode(403, new
-            {
-                error = "pairing_closed",
-                reason = eligibility.Reason,
-                message = "관측소가 AP 모드이거나 기존 페어링이 없을 때만 가능합니다."
-            });
-        }
-
         if (string.IsNullOrWhiteSpace(req.DeviceId))
             return BadRequest(new { error = "invalid_request", message = "deviceId 필수" });
 

@@ -278,8 +278,12 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
 
     private void HandleHello(JsonElement root)
     {
-        var token = root.TryGetProperty("token", out var t) ? t.GetString() : null;
-        var deviceId = root.TryGetProperty("deviceId", out var d) ? d.GetString() : null;
+        // Token + deviceId arrive nested under "payload" — same envelope the
+        // iOS client uses for offer/answer/ice. Earlier this read the root
+        // directly and silently rejected every authenticated dial.
+        var source = root.TryGetProperty("payload", out var p) ? p : root;
+        var token = source.TryGetProperty("token", out var t) ? t.GetString() : null;
+        var deviceId = source.TryGetProperty("deviceId", out var d) ? d.GetString() : null;
         if (string.IsNullOrEmpty(token))
         {
             _log.LogWarning("hello without token");
