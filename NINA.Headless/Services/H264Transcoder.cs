@@ -69,26 +69,23 @@ public class H264Transcoder : IAsyncDisposable
                 // browser/iOS decoder can't keep up with (visual = black canvas, even though
                 // the WebRTC peer says "connected"). Aspect-preserved, even-rounded height.
                 "-vf", "scale=1280:-2,normalize=smoothing=20,eq=gamma=0.8",
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-tune", "zerolatency",
+                // VP8 instead of H.264. H.264 stack hit chrome decoder rejecting
+                // every frame regardless of profile-level-id rewrites, AUD
+                // insertion, slice-size capping, or frame-boundary detection —
+                // SIPSorcery's H.264 RTP packetizer marker/timestamp behavior is
+                // the suspected wall. VP8 frames are self-contained access
+                // units (no SPS/PPS/parameter-set dance), and SIPSorcery's VP8
+                // packetizer is the well-trodden path on the project.
+                "-c:v", "libvpx",
+                "-deadline", "realtime",
+                "-cpu-used", "8",
                 "-pix_fmt", "yuv420p",
-                "-profile:v", "baseline",
-                "-level", "3.1",
                 "-b:v", "1500k",
                 "-maxrate", "2000k",
                 "-bufsize", "3000k",
                 "-g", Math.Max(2, targetFps / 2).ToString(),
-                "-bf", "0",
-                "-x264-params", "slice-max-size=1100:keyint_min=" + Math.Max(2, targetFps / 2),
-                // h264_metadata=aud=insert prepends an Access Unit Delimiter
-                // (NAL type 9) at the start of every access unit. The
-                // libx264 `aud=1` flag never made it through to the actual
-                // bitstream — the BSF is the reliable path. Without AUDs the
-                // FrameBoundary event never fires, RTP timestamps stay at 0,
-                // and chrome drops every frame trying to reassemble.
-                "-bsf:v", "h264_metadata=aud=insert,dump_extra=freq=keyframe",
-                "-f", "h264", "pipe:1"
+                "-error-resilient", "1",
+                "-f", "ivf", "pipe:1"
             });
 
             var psi = new ProcessStartInfo("ffmpeg", args)
@@ -160,91 +157,59 @@ public class H264Transcoder : IAsyncDisposable
         catch (Exception ex) { _log.LogDebug(ex, "H264Transcoder: push failed"); }
     }
 
-    // Read the Annex B stream and emit one NAL unit per event. Uses a growing buffer with a
-    // simple 2-pointer scan for start codes. Start codes can be 3 bytes (00 00 01) or 4 bytes
-    // (00 00 00 01); we accept either and always strip them before raising the event.
+    // Read the IVF (VP8 raw frames) stream from ffmpeg.
+    //   File header: 32 bytes, starts with "DKIF" magic.
+    //   Per frame:   12-byte header [size:u32 LE][pts:u64 LE] + frame body.
+    // Each frame is a complete VP8 access unit; emit one FrameBoundary +
+    // NaluReady per frame (subscribers see a single self-contained payload
+    // so SIPSorcery's VP8 RTP packetizer can wrap it without parameter-set
+    // gymnastics).
     private async Task ReadNaluLoopAsync(Stream stdout, CancellationToken ct)
     {
-        var buffer = new List<byte>(1 << 16);
-        var chunk = new byte[8192];
         try
         {
+            var fileHeader = new byte[32];
+            if (!await ReadExactAsync(stdout, fileHeader, ct)) return;
+            if (!(fileHeader[0] == (byte)'D' && fileHeader[1] == (byte)'K' && fileHeader[2] == (byte)'I' && fileHeader[3] == (byte)'F'))
+            {
+                _log.LogWarning("VideoTranscoder: IVF magic missing — got {B0:X2} {B1:X2} {B2:X2} {B3:X2}",
+                    fileHeader[0], fileHeader[1], fileHeader[2], fileHeader[3]);
+                return;
+            }
+
+            var frameHeader = new byte[12];
             while (!ct.IsCancellationRequested)
             {
-                var n = await stdout.ReadAsync(chunk, ct);
-                if (n == 0) return;
-                buffer.AddRange(new ArraySegment<byte>(chunk, 0, n));
-
-                // Walk the buffer, emit NALUs whose start + next-start we have seen.
-                var bytes = buffer.ToArray(); // OK-ish: NALU boundaries come quickly, buffer stays small
-                int pos = FindStartCode(bytes, 0, out int startCodeLen);
-                if (pos < 0) continue;
-
-                int consumed = 0;
-                while (true)
+                if (!await ReadExactAsync(stdout, frameHeader, ct)) return;
+                int frameSize = frameHeader[0] | (frameHeader[1] << 8) | (frameHeader[2] << 16) | (frameHeader[3] << 24);
+                if (frameSize <= 0 || frameSize > 4_000_000)
                 {
-                    int next = FindStartCode(bytes, pos + startCodeLen, out int nextStartLen);
-                    if (next < 0)
-                    {
-                        // Keep from `pos` onward for the next iteration.
-                        consumed = pos;
-                        break;
-                    }
-                    int naluStart = pos + startCodeLen;
-                    int naluEnd = next;
-                    var nalu = new byte[naluEnd - naluStart];
-                    Array.Copy(bytes, naluStart, nalu, 0, nalu.Length);
-                    // Frame-boundary detection without an AUD: H.264 spec says
-                    // an access unit begins on the first VCL NAL (type 1, 5, …)
-                    // whose `first_mb_in_slice` field is zero — that field is
-                    // Exp-Golomb-coded so a leading 1-bit means value 0. Also
-                    // treat AUD (9) and SPS (7) as a boundary, since they
-                    // legitimately mark the start of an access unit. Without
-                    // this hook the RTP timestamp never advances and chrome
-                    // drops every frame as it tries to reassemble.
-                    if (nalu.Length > 0)
-                    {
-                        var t = nalu[0] & 0x1F;
-                        bool boundary = t == 9 || t == 7
-                            || ((t == 1 || t == 5) && nalu.Length >= 2 && (nalu[1] & 0x80) != 0);
-                        if (boundary)
-                        {
-                            try { FrameBoundary?.Invoke(); }
-                            catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
-                        }
-                    }
-                    if (!(nalu.Length > 0 && (nalu[0] & 0x1F) == 9))
-                    {
-                        try { NaluReady?.Invoke(nalu); }
-                        catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
-                    }
-
-                    pos = next;
-                    startCodeLen = nextStartLen;
+                    _log.LogWarning("VideoTranscoder: unreasonable frame size {Size}, bailing", frameSize);
+                    return;
                 }
+                var frame = new byte[frameSize];
+                if (!await ReadExactAsync(stdout, frame, ct)) return;
 
-                if (consumed > 0)
-                {
-                    buffer.RemoveRange(0, consumed);
-                }
+                try { FrameBoundary?.Invoke(); }
+                catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
+                try { NaluReady?.Invoke(frame); }
+                catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception ex) { _log.LogWarning(ex, "H264Transcoder: reader loop error"); }
+        catch (Exception ex) { _log.LogWarning(ex, "VideoTranscoder: reader loop error"); }
     }
 
-    private static int FindStartCode(byte[] data, int from, out int codeLen)
+    private static async Task<bool> ReadExactAsync(Stream s, byte[] buf, CancellationToken ct)
     {
-        codeLen = 0;
-        for (int i = from; i + 2 < data.Length; i++)
+        int total = 0;
+        while (total < buf.Length)
         {
-            if (data[i] == 0 && data[i + 1] == 0)
-            {
-                if (data[i + 2] == 1) { codeLen = 3; return i; }
-                if (i + 3 < data.Length && data[i + 2] == 0 && data[i + 3] == 1) { codeLen = 4; return i; }
-            }
+            int n = await s.ReadAsync(buf.AsMemory(total, buf.Length - total), ct);
+            if (n == 0) return false;
+            total += n;
         }
-        return -1;
+        return true;
     }
 
     public async ValueTask DisposeAsync() => await StopAsync();
