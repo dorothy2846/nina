@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -26,8 +27,8 @@ public class SupabaseAuthService
     private readonly string _anonKey;
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(10);
-    private readonly Dictionary<string, (string userUuid, DateTime expires)> _cache = new();
-    private readonly object _cacheLock = new();
+    private readonly ConcurrentDictionary<string, (string userUuid, DateTime expires)> _cache = new();
+    private DateTime _lastSweep = DateTime.MinValue;
 
     public SupabaseAuthService(IHttpClientFactory httpFactory, ILogger<SupabaseAuthService> log)
     {
@@ -49,11 +50,8 @@ public class SupabaseAuthService
     {
         if (string.IsNullOrWhiteSpace(accessToken)) return null;
 
-        lock (_cacheLock)
-        {
-            if (_cache.TryGetValue(accessToken, out var hit) && DateTime.UtcNow < hit.expires)
-                return hit.userUuid;
-        }
+        if (_cache.TryGetValue(accessToken, out var hit) && DateTime.UtcNow < hit.expires)
+            return hit.userUuid;
 
         try
         {
@@ -74,17 +72,8 @@ public class SupabaseAuthService
             var doc = await resp.Content.ReadFromJsonAsync<SupabaseUserResponse>(cancellationToken: ct);
             if (doc?.Id == null) return null;
 
-            lock (_cacheLock)
-            {
-                _cache[accessToken] = (doc.Id, DateTime.UtcNow + CacheTtl);
-                // Cheap eviction: drop expired entries opportunistically so the dict
-                // can't grow unbounded across long runs.
-                if (_cache.Count > 64)
-                {
-                    foreach (var key in _cache.Where(kv => kv.Value.expires < DateTime.UtcNow).Select(kv => kv.Key).ToList())
-                        _cache.Remove(key);
-                }
-            }
+            _cache[accessToken] = (doc.Id, DateTime.UtcNow + CacheTtl);
+            MaybeSweepExpired();
             return doc.Id;
         }
         catch (Exception ex)
@@ -92,6 +81,19 @@ public class SupabaseAuthService
             _log.LogDebug(ex, "Supabase verify failed (likely offline)");
             return null;
         }
+    }
+
+    /// <summary>Drop expired entries — at most once per minute so concurrent
+    /// fills don't all try to sweep. Bounded by client-token cardinality
+    /// (typically 1–5 phones) so the linear scan is cheap when it runs.</summary>
+    private void MaybeSweepExpired()
+    {
+        if (_cache.Count <= 64) return;
+        var now = DateTime.UtcNow;
+        if (now - _lastSweep < TimeSpan.FromMinutes(1)) return;
+        _lastSweep = now;
+        foreach (var kv in _cache)
+            if (kv.Value.expires < now) _cache.TryRemove(kv.Key, out _);
     }
 
     private class SupabaseUserResponse

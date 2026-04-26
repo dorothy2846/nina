@@ -33,14 +33,12 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
     private readonly ILogger<RendezvousClient> _log;
     private readonly HttpClient _loopback;
 
-    // Per-peer video transport state. Track is non-null only while a remote
-    // viewer is connected; we attach NALU/FrameBoundary handlers lazily on
-    // first hello-ack and detach on peer close so encoder ticks don't fan
-    // out into a dead RTCPeerConnection.
+    // Track is non-null only while a remote viewer is connected. Handler
+    // attach/detach state is derived from the track itself — keeping a
+    // separate bool drifts.
     private MediaStreamTrack? _videoTrack;
     private long _videoStreamStartTicks;
     private uint _videoRtpTimestamp;
-    private bool _videoHandlersAttached;
 
     private ClientWebSocket? _ws;
     private RTCPeerConnection? _peer;
@@ -331,33 +329,28 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
         }
     }
 
-    /// <summary>Subscribe to the shared H264Transcoder events. Idempotent —
-    /// re-attaching is a no-op so we can call this on every fresh offer.
-    /// The detach side is the symmetric cleanup; called when the peer dies
-    /// so encoder ticks don't leak into a closed RTCPeerConnection.</summary>
     private void AttachVideoHandlers()
     {
-        if (_videoHandlersAttached) return;
+        lock (_peerLock)
+        {
+            _videoStreamStartTicks = 0;
+            _videoRtpTimestamp = 0;
+        }
+        _h264.FrameBoundary -= OnVideoFrameBoundary;
+        _h264.NaluReady -= OnVideoNaluReady;
         _h264.FrameBoundary += OnVideoFrameBoundary;
         _h264.NaluReady += OnVideoNaluReady;
-        _videoHandlersAttached = true;
     }
 
     private void DetachVideoHandlers()
     {
-        if (!_videoHandlersAttached) return;
         _h264.FrameBoundary -= OnVideoFrameBoundary;
         _h264.NaluReady -= OnVideoNaluReady;
-        _videoHandlersAttached = false;
-        _videoStreamStartTicks = 0;
-        _videoRtpTimestamp = 0;
     }
 
-    /// <summary>Wall-clock RTP timestamp for the rendezvous peer's video
-    /// stream. Same algorithm as WebRTCService.OnFrameBoundary — 90 kHz,
-    /// computed from elapsed ticks since the first frame of this session.
-    /// Independent of the LAN path's counter so two simultaneous viewers
-    /// can each have their own monotonic clock.</summary>
+    /// <summary>Wall-clock RTP timestamp at 90 kHz from the first frame of
+    /// this session. Independent of the LAN counter so two simultaneous
+    /// viewers each have their own monotonic clock.</summary>
     private void OnVideoFrameBoundary()
     {
         var startTicks = Volatile.Read(ref _videoStreamStartTicks);

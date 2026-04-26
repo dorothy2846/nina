@@ -163,65 +163,6 @@ public class WebRTCService
         return (answerSdp, id.ToString());
     }
 
-    /// <summary>Inserts an `a=extmap:&lt;id&gt; ...playout-delay` line into the
-    /// video m= section of the offer if it's not already present and the
-    /// requested id isn't already taken. Picks the first non-conflicting id
-    /// at or above the requested one (so if iOS ever ships an offer that
-    /// already uses 5, we slide to 6/7/etc).</summary>
-    private static string InjectPlayoutDelayExtmap(string offerSdp, int requestedId)
-    {
-        const string uri = PlayoutDelayExtension.RTP_HEADER_EXTENSION_URI;
-        if (offerSdp.Contains(uri)) return offerSdp; // already present
-
-        // Collect taken extmap ids in the m=video section so we don't collide.
-        var lines = offerSdp.Split('\n');
-        var inVideo = false;
-        var taken = new HashSet<int>();
-        foreach (var raw in lines)
-        {
-            var line = raw.TrimEnd('\r');
-            if (line.StartsWith("m="))
-            {
-                inVideo = line.StartsWith("m=video");
-                continue;
-            }
-            if (!inVideo) continue;
-            if (line.StartsWith("a=extmap:"))
-            {
-                var rest = line.Substring("a=extmap:".Length);
-                var spaceIx = rest.IndexOf(' ');
-                if (spaceIx > 0 && int.TryParse(rest.Substring(0, spaceIx), out var id))
-                    taken.Add(id);
-            }
-        }
-        var chosen = requestedId;
-        while (taken.Contains(chosen)) chosen++;
-
-        // Splice the new extmap line right before the m=audio line if any,
-        // otherwise just append to the end. Keeps line ordering tidy enough
-        // for downstream parsers.
-        var insert = $"a=extmap:{chosen} {uri}";
-        var sb = new System.Text.StringBuilder(offerSdp.Length + insert.Length + 4);
-        var inserted = false;
-        var inVideoSection = false;
-        foreach (var raw in lines)
-        {
-            var line = raw.TrimEnd('\r');
-            if (line.StartsWith("m="))
-            {
-                if (inVideoSection && !inserted)
-                {
-                    sb.Append(insert).Append("\r\n");
-                    inserted = true;
-                }
-                inVideoSection = line.StartsWith("m=video");
-            }
-            sb.Append(line).Append("\r\n");
-        }
-        if (inVideoSection && !inserted) sb.Append(insert).Append("\r\n");
-        return sb.ToString();
-    }
-
     public Task ClosePeerAsync(string peerId)
     {
         if (!Guid.TryParse(peerId, out var id)) return Task.CompletedTask;

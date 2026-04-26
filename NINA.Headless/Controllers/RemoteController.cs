@@ -183,22 +183,12 @@ public class RemoteController : ControllerBase
         return NoContent();
     }
 
-    /// <summary>Two-tier auth check used by every owner-only endpoint on this
-    /// controller. Order matters:
-    ///   1. Treat the bearer as a Supabase access token. If it verifies AND
-    ///      either (a) the observatory has no owner yet (auto-claim) or
-    ///      (b) the verified UUID is the owner / a co-owner — accept.
-    ///   2. Fall back to the legacy LAN-trust bearer token if the Supabase
-    ///      path didn't resolve. This keeps no-internet field deployments
-    ///      working: a phone that paired on the LAN before the observatory
-    ///      ever saw the Internet still has a valid token to use.
-    ///
-    /// The fallback runs unconditionally — we don't gate it on "request came
-    /// from LAN" because the rendezvous-tunnelled HTTP path forwards LAN
-    /// requests with the loopback IP as the source. Filtering by source IP
-    /// here would break legitimate remote-via-rendezvous calls. The actual
-    /// security gate is "must possess a token that was minted on the LAN
-    /// at some point", which is exactly what the legacy model gives us.</summary>
+    /// <summary>Authorize the caller via Supabase JWT first; fall back to the
+    /// legacy LAN-trust bearer token when Supabase verify is unavailable
+    /// (offline observatory, pre-account-era pairing). Fallback runs even
+    /// for rendezvous-tunnelled requests because the tunnel forwards from
+    /// loopback so we can't distinguish LAN from remote here — the gate is
+    /// "possesses a valid token", whichever kind.</summary>
     private async Task<bool> IsAuthorizedAsync()
     {
         var auth = Request.Headers.Authorization.ToString();
@@ -206,16 +196,7 @@ public class RemoteController : ControllerBase
         if (string.IsNullOrEmpty(token)) return false;
 
         var uuid = await _supabase.VerifyAsync(token, HttpContext.RequestAborted);
-        if (uuid != null)
-        {
-            if (_owner.IsAuthorized(uuid)) return true;
-            if (_owner.TryClaim(uuid)) return true;
-            // Verified Supabase user but not owner / not first-claimer.
-            return false;
-        }
-
-        // Supabase verify returned null — either offline, or the bearer is
-        // a legacy LAN-trust token. Try that path.
-        return _paired.Verify(token) != null;
+        if (uuid == null) return _paired.Verify(token) != null;
+        return _owner.IsAuthorized(uuid) || _owner.TryClaim(uuid);
     }
 }
