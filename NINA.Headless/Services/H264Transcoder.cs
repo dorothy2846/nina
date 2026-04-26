@@ -62,29 +62,44 @@ public class H264Transcoder : IAsyncDisposable
                 "-flags", "low_delay",
                 "-f", "image2pipe",
                 "-c:v", "mjpeg",
-                "-r", targetFps.ToString(),
+                // Stamp frames with wall-clock time instead of a synthetic
+                // frame-index cadence — keeps RTP timestamps in sync with
+                // reality and stops chrome's jitter buffer from puffing up
+                // when the input rate diverges from the declared fps.
+                "-use_wallclock_as_timestamps", "1",
                 "-i", "-",
-                // Scale to 1280-wide *first* so libx264 isn't asked to encode a full-sensor
-                // 3856×2180 frame at 10 fps — that produces ~100 Mbps of H.264 which the
-                // browser/iOS decoder can't keep up with (visual = black canvas, even though
-                // the WebRTC peer says "connected"). Aspect-preserved, even-rounded height.
-                "-vf", "scale=1280:-2,normalize=smoothing=20,eq=gamma=0.8",
-                // VP8 instead of H.264. H.264 stack hit chrome decoder rejecting
-                // every frame regardless of profile-level-id rewrites, AUD
-                // insertion, slice-size capping, or frame-boundary detection —
-                // SIPSorcery's H.264 RTP packetizer marker/timestamp behavior is
-                // the suspected wall. VP8 frames are self-contained access
-                // units (no SPS/PPS/parameter-set dance), and SIPSorcery's VP8
-                // packetizer is the well-trodden path on the project.
+                // Server-side downsample (downscale-only). User's capture
+                // resolution comes through unchanged from the camera; we
+                // cap at 640-wide so encoding stays ahead of input rate,
+                // but if the input is already <640 (high binning) we leave
+                // it alone — upscaling just blurs without adding info.
+                // Stream quality can never exceed the user's capture setup,
+                // matching the priority "no-stutter > low-latency > quality".
+                "-vf", "scale='min(640,iw)':-2,normalize=smoothing=20,eq=gamma=0.8",
                 "-c:v", "libvpx",
                 "-deadline", "realtime",
-                "-cpu-used", "8",
+                "-cpu-used", "16",
                 "-pix_fmt", "yuv420p",
-                "-b:v", "1500k",
-                "-maxrate", "2000k",
-                "-bufsize", "3000k",
+                "-b:v", "800k",
+                "-maxrate", "1500k",
+                "-bufsize", "1500k",
                 "-g", Math.Max(2, targetFps / 2).ToString(),
                 "-error-resilient", "1",
+                // libvpx defaults `lag-in-frames=25` — encoder waits for 25
+                // frames of look-ahead before emitting. At 2.5 input fps
+                // that's a built-in 10s of latency. Force 0 to emit every
+                // frame as soon as it's encoded.
+                "-lag-in-frames", "0",
+                "-auto-alt-ref", "0",
+                // Output side: drop frames if input rate exceeds the
+                // encoder's pace instead of buffering them. Pairs with the
+                // input -fflags nobuffer so backlog can't build up.
+                "-fps_mode", "passthrough",
+                // Flush every encoded packet immediately instead of letting
+                // the muxer pool them — that pooling was adding ~17 s of PTS
+                // drift visible in `time` vs `elapsed` and translating into
+                // multi-second viewfinder lag.
+                "-flush_packets", "1",
                 "-f", "ivf", "pipe:1"
             });
 
@@ -143,18 +158,27 @@ public class H264Transcoder : IAsyncDisposable
         _log.LogInformation("H264Transcoder: stopped");
     }
 
-    /// <summary>Push one MJPEG frame into the encoder. Silently dropped if the encoder isn't
-    /// running (broadcast racing against shutdown).</summary>
-    public async Task PushJpegAsync(byte[] jpegBytes, CancellationToken ct)
+    /// <summary>Push one MJPEG frame into the encoder. Drops the frame if a
+    /// previous push is still in-flight — without this guard, BLOBs from the
+    /// camera (~2.5 fps) build up faster than ffmpeg can drain them and the
+    /// stream lags by seconds. Live viewfinder semantics: latest frame wins,
+    /// stale frames disappear.</summary>
+    private int _pushInFlight;
+    public Task PushJpegAsync(byte[] jpegBytes, CancellationToken ct)
     {
         var stdin = _stdin;
-        if (stdin == null) return;
-        try
+        if (stdin == null) return Task.CompletedTask;
+        if (Interlocked.CompareExchange(ref _pushInFlight, 1, 0) != 0) return Task.CompletedTask;
+        return Task.Run(async () =>
         {
-            await stdin.WriteAsync(jpegBytes, ct);
-            await stdin.FlushAsync(ct);
-        }
-        catch (Exception ex) { _log.LogDebug(ex, "H264Transcoder: push failed"); }
+            try
+            {
+                await stdin.WriteAsync(jpegBytes, ct);
+                await stdin.FlushAsync(ct);
+            }
+            catch (Exception ex) { _log.LogDebug(ex, "H264Transcoder: push failed"); }
+            finally { Interlocked.Exchange(ref _pushInFlight, 0); }
+        }, ct);
     }
 
     // Read the IVF (VP8 raw frames) stream from ffmpeg.

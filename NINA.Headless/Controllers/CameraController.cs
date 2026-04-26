@@ -213,6 +213,23 @@ public class CameraController : ControllerBase
         if (selected?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Camera))
             return StatusCode(503, new { success = false, message = "No INDI camera connected" });
 
+        // INDI drivers (PlayerOne / ZWO / etc.) reject CCD_EXPOSURE while
+        // CCD_VIDEO_STREAM is ON — the still capture times out at 30s.
+        // We pause the streaming MODE (driver level) for the duration, but
+        // CameraStreamService keeps the encoder + WebRTC pipeline alive by
+        // re-pushing the last cached frame via its keepalive loop. The
+        // viewfinder shows a held-but-not-frozen image; the user sees no
+        // disconnect, capture runs at full precision, and the stream
+        // resumes with fresh frames as soon as the driver releases the
+        // sensor. Best of both worlds without the impossible "physically
+        // simultaneous capture + stream" requirement.
+        bool resumeStreamAfter = _stream.IsRunning;
+        if (resumeStreamAfter)
+        {
+            try { await _stream.PauseSensorAsync(HttpContext.RequestAborted); }
+            catch { /* hiccup — capture still tries */ }
+        }
+
         try
         {
             // Apply gain/offset before starting the exposure. Silently ignored if the driver
@@ -293,6 +310,13 @@ public class CameraController : ControllerBase
         finally
         {
             _state.MarkExposureFinished();
+            if (resumeStreamAfter)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await _stream.ResumeSensorAsync(CancellationToken.None); } catch { }
+                });
+            }
         }
     }
 
@@ -510,11 +534,11 @@ public class CameraController : ControllerBase
     {
         var exp = request?.ExposureSeconds ?? _stream.ExposureSeconds;
         var fps = request?.MaxFps ?? _stream.MaxFps;
-        _stream.Configure(exp, fps);
+        _stream.Configure(exp, fps, request?.BinX, request?.BinY, request?.Gain);
         try
         {
             await _stream.StartAsync(HttpContext.RequestAborted);
-            return Ok(new { success = true, exposureSeconds = exp, maxFps = fps });
+            return Ok(new { success = true, exposureSeconds = exp, maxFps = fps, binX = request?.BinX, binY = request?.BinY, gain = request?.Gain });
         }
         catch (Exception ex)
         {
@@ -532,11 +556,11 @@ public class CameraController : ControllerBase
     [HttpPost("stream/configure")]
     public IActionResult StreamConfigure([FromBody] StreamConfigRequest request)
     {
-        _stream.Configure(request.ExposureSeconds, request.MaxFps);
+        _stream.Configure(request.ExposureSeconds, request.MaxFps, request.BinX, request.BinY, request.Gain);
         return Ok(new { success = true, exposureSeconds = _stream.ExposureSeconds, maxFps = _stream.MaxFps });
     }
 
-    public record StreamConfigRequest(double ExposureSeconds, double MaxFps);
+    public record StreamConfigRequest(double ExposureSeconds, double MaxFps, int? BinX = null, int? BinY = null, int? Gain = null);
 
     // ----- SER/AVI recording (driver-native) -----
     // The INDI driver owns the file — we just flip switches. Default output:

@@ -46,15 +46,31 @@ public class WebRTCService
         _naluHandlerAttached = true;
     }
 
-    /// <summary>Advance the RTP timestamp once per access unit (frame). All
-    /// NALs that follow until the next AUD belong to this frame and must
-    /// share this timestamp — that's what lets the receiver group slices
-    /// into a complete frame. 90 kHz / targetFps; 9000 covers the 10 fps
-    /// streaming default and over-shooting on faster captures only widens
-    /// frame spacing, never desyncs.</summary>
+    /// <summary>RTP timestamp from wall-clock (90 kHz). Hard-coding +9000
+    /// per frame assumed an exact 10 fps cadence; the real pipeline runs
+    /// closer to 2.5 fps and varies, so the timestamp ran ~4× faster than
+    /// real time. Chrome's jitter buffer compensates by holding frames
+    /// until the timestamp catches up — visible to the user as multi-second
+    /// playback lag. Wall-clock fixes this and matches what live encoders
+    /// actually emit on the wire.</summary>
+    private long _streamStartTicks;
     private void OnFrameBoundary()
     {
-        _rtpTimestamp += 9000;
+        var startTicks = Volatile.Read(ref _streamStartTicks);
+        if (startTicks == 0)
+        {
+            startTicks = DateTime.UtcNow.Ticks;
+            Interlocked.CompareExchange(ref _streamStartTicks, startTicks, 0);
+            startTicks = Volatile.Read(ref _streamStartTicks);
+        }
+        var elapsedTicks = DateTime.UtcNow.Ticks - startTicks;
+        // 1 second = 10_000_000 ticks (100 ns each). 90 kHz means 90_000
+        // RTP units per second, so factor = 90_000 / 10_000_000 = 9 / 1000.
+        // Earlier `* 9 / 1_000_000` was off by 1000× — RTP timestamps grew
+        // 1000× too slowly, so chrome's jitter buffer interpreted every
+        // arrival as "way ahead of media time" and queued frames forever
+        // (visible as jitterBuf monotonically rising 22 → 1384 ms).
+        _rtpTimestamp = (uint)(elapsedTicks * 9 / 1000);
         Interlocked.Increment(ref _frameCount);
         MaybeLog();
     }
