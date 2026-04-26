@@ -63,10 +63,26 @@ public class H264Transcoder : IAsyncDisposable
                 "-c:v", "libx264",
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
-                "-crf", crf.ToString(),
                 "-pix_fmt", "yuv420p",
-                "-g", (targetFps * 2).ToString(),
+                // CBR-ish bitrate cap. Earlier this used `-crf` which let
+                // libx264 spend whatever it wanted on noisy mono astronomy
+                // frames — 16 Mbps of output overwhelms RTP fragmentation
+                // and any wireless link. 1.5 Mbps is plenty for a viewfinder.
+                "-b:v", "1500k",
+                "-maxrate", "2000k",
+                "-bufsize", "3000k",
+                // Short GOP — newly-joined WebRTC peers wait for the next IDR
+                // before the decoder can start. With GOP=20 (2s @ 10fps) the
+                // canvas stays black for up to 2s. GOP≈0.5s makes cold-start
+                // visually instant.
+                "-g", Math.Max(2, targetFps / 2).ToString(),
                 "-bf", "0",
+                // Cap NAL/slice size to ~MTU so each NALU fits in a single
+                // RTP packet. Without this, large slices need RFC 6184 FU-A
+                // fragmentation which SIPSorcery's H.264 packetizer doesn't
+                // currently emit — symptom is "peer connected, decoder waits
+                // forever, canvas stays black".
+                "-x264-params", "slice-max-size=1100:keyint_min=" + Math.Max(2, targetFps / 2),
                 "-bsf:v", "dump_extra=freq=keyframe",
                 "-f", "h264", "pipe:1"
             });
