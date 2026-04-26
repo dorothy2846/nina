@@ -39,11 +39,20 @@ internal static class WebRTCTestPage
       pc.onconnectionstatechange = () => { statusEl.textContent = pc.connectionState; log('state=' + pc.connectionState); };
       pc.ontrack = ev => {
         log('track kind=' + ev.track.kind);
-        // SIPSorcery's SDP answer doesn't include `a=msid`, so ev.streams is
-        // empty even though the track itself arrives. Wrap the bare track in
-        // a fresh MediaStream — that's what the video element will render.
         const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([ev.track]);
         document.getElementById('vid').srcObject = stream;
+        // Self-report inbound video stats every 2s so we can see whether the
+        // problem is "packets never arrive" vs "packets arrive but decoder
+        // can't make a frame" without leaving the page for chrome://webrtc-internals.
+        setInterval(async () => {
+          if (!pc) return;
+          const stats = await pc.getStats();
+          stats.forEach(s => {
+            if (s.type === 'inbound-rtp' && s.kind === 'video') {
+              log('inbound video: packets=' + (s.packetsReceived||0) + ' bytes=' + (s.bytesReceived||0) + ' framesReceived=' + (s.framesReceived||0) + ' framesDecoded=' + (s.framesDecoded||0) + ' framesDropped=' + (s.framesDropped||0) + ' codec=' + (s.codecId||'?'));
+            }
+          });
+        }, 2000);
       };
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);

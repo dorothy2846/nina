@@ -73,37 +73,21 @@ public class H264Transcoder : IAsyncDisposable
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
                 "-pix_fmt", "yuv420p",
-                // Lock to Baseline 3.1 to match the profile-level-id=42001f
-                // SIPSorcery negotiates on PT 103. Constrained Baseline 3.2
-                // (libx264 default with `ultrafast`) is *probably* compatible,
-                // but iOS/some browsers will silently drop packets if the
-                // declared profile and the SPS-level fields disagree.
                 "-profile:v", "baseline",
                 "-level", "3.1",
-                // CBR-ish bitrate cap. Earlier this used `-crf` which let
-                // libx264 spend whatever it wanted on noisy mono astronomy
-                // frames — 16 Mbps of output overwhelms RTP fragmentation
-                // and any wireless link. 1.5 Mbps is plenty for a viewfinder.
                 "-b:v", "1500k",
                 "-maxrate", "2000k",
                 "-bufsize", "3000k",
-                // Short GOP — newly-joined WebRTC peers wait for the next IDR
-                // before the decoder can start. With GOP=20 (2s @ 10fps) the
-                // canvas stays black for up to 2s. GOP≈0.5s makes cold-start
-                // visually instant.
                 "-g", Math.Max(2, targetFps / 2).ToString(),
                 "-bf", "0",
-                // Cap NAL/slice size to ~MTU so each NALU fits in a single
-                // RTP packet. Without this, large slices need RFC 6184 FU-A
-                // fragmentation which SIPSorcery's H.264 packetizer doesn't
-                // currently emit — symptom is "peer connected, decoder waits
-                // forever, canvas stays black".
-                // aud=1 emits an Access Unit Delimiter NAL (type 9) at the
-                // start of every frame — used by FrameBoundary subscribers
-                // to advance the RTP timestamp once per frame, not once per
-                // slice/NAL.
-                "-x264-params", "slice-max-size=1100:keyint_min=" + Math.Max(2, targetFps / 2) + ":aud=1",
-                "-bsf:v", "dump_extra=freq=keyframe",
+                "-x264-params", "slice-max-size=1100:keyint_min=" + Math.Max(2, targetFps / 2),
+                // h264_metadata=aud=insert prepends an Access Unit Delimiter
+                // (NAL type 9) at the start of every access unit. The
+                // libx264 `aud=1` flag never made it through to the actual
+                // bitstream — the BSF is the reliable path. Without AUDs the
+                // FrameBoundary event never fires, RTP timestamps stay at 0,
+                // and chrome drops every frame trying to reassemble.
+                "-bsf:v", "h264_metadata=aud=insert,dump_extra=freq=keyframe",
                 "-f", "h264", "pipe:1"
             });
 
@@ -210,17 +194,26 @@ public class H264Transcoder : IAsyncDisposable
                     int naluEnd = next;
                     var nalu = new byte[naluEnd - naluStart];
                     Array.Copy(bytes, naluStart, nalu, 0, nalu.Length);
-                    // NAL header low 5 bits = nal_unit_type. Type 9 = AUD,
-                    // marks the start of a new access unit (frame). Emit a
-                    // FrameBoundary instead of treating the AUD as content;
-                    // RTP receivers only need the AUD to detect frame edges
-                    // when the encoder splits frames into multiple slices.
-                    if (nalu.Length > 0 && (nalu[0] & 0x1F) == 9)
+                    // Frame-boundary detection without an AUD: H.264 spec says
+                    // an access unit begins on the first VCL NAL (type 1, 5, …)
+                    // whose `first_mb_in_slice` field is zero — that field is
+                    // Exp-Golomb-coded so a leading 1-bit means value 0. Also
+                    // treat AUD (9) and SPS (7) as a boundary, since they
+                    // legitimately mark the start of an access unit. Without
+                    // this hook the RTP timestamp never advances and chrome
+                    // drops every frame as it tries to reassemble.
+                    if (nalu.Length > 0)
                     {
-                        try { FrameBoundary?.Invoke(); }
-                        catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
+                        var t = nalu[0] & 0x1F;
+                        bool boundary = t == 9 || t == 7
+                            || ((t == 1 || t == 5) && nalu.Length >= 2 && (nalu[1] & 0x80) != 0);
+                        if (boundary)
+                        {
+                            try { FrameBoundary?.Invoke(); }
+                            catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
+                        }
                     }
-                    else
+                    if (!(nalu.Length > 0 && (nalu[0] & 0x1F) == 9))
                     {
                         try { NaluReady?.Invoke(nalu); }
                         catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }

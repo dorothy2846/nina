@@ -63,6 +63,19 @@ public class WebRTCService
     {
         if (_peers.IsEmpty) return;
         Interlocked.Increment(ref _naluCount);
+        // Diagnostic: dump the first few SPS/PPS NALUs and a NAL-type sequence
+        // so we can see exactly what libx264 is emitting and in what order.
+        if (nalu.Length > 0)
+        {
+            var t = nalu[0] & 0x1F;
+            if (_typeSeq.Count < 50) _typeSeq.Add(t);
+            if (_typeSeq.Count == 50) _log.LogInformation("First 50 NAL types: {Seq}", string.Join(",", _typeSeq));
+            if ((t == 7 || t == 8) && _spsLogged < 4)
+            {
+                _spsLogged++;
+                _log.LogInformation("NAL type={T} hex={Hex}", t, Convert.ToHexString(nalu));
+            }
+        }
         foreach (var kv in _peers)
         {
             try { kv.Value.Peer.SendVideo(_rtpTimestamp, nalu); Interlocked.Increment(ref _sendOk); }
@@ -70,6 +83,9 @@ public class WebRTCService
         }
         MaybeLog();
     }
+
+    private readonly List<int> _typeSeq = new();
+    private int _spsLogged;
 
     private long _frameCount, _naluCount, _sendOk, _sendFail;
     private long _lastLogTicks;
@@ -138,11 +154,17 @@ public class WebRTCService
         var answerSdp = peer.localDescription.sdp.ToString();
         // SIPSorcery emits the m= line with `UDP/TLS/RTP/SAVP` even though the
         // SDP also lists per-payload-type `rtcp-fb` attributes. Browsers
-        // expect `SAVPF` (RFC 5124) when feedback is advertised; some reject
-        // the answer outright or fail to deliver inbound RTP to the decoder
-        // — symptom is a permanently-black <video> element while server-side
-        // SendVideo reports success. Patch on the way out.
+        // expect `SAVPF` (RFC 5124) when feedback is advertised.
         answerSdp = answerSdp.Replace(" UDP/TLS/RTP/SAVP ", " UDP/TLS/RTP/SAVPF ");
+
+        // Match SDP's profile-level-id to what libx264 actually puts in the
+        // SPS. Server-side dump shows SPS = 67 42 C0 1F ..., i.e. profile_idc
+        // = 0x42 (Baseline), constraint flags = 0xC0 (set0+set1), level_idc
+        // = 0x1F (3.1) → profile-level-id = 42C01F. SIPSorcery defaults to
+        // 42001F, so the browser's H.264 decoder strict-checks SPS vs. SDP
+        // and drops every frame (framesDecoded = 0).
+        answerSdp = System.Text.RegularExpressions.Regex.Replace(
+            answerSdp, @"profile-level-id=[0-9A-Fa-f]+", "profile-level-id=42c01f");
         _log.LogInformation("WebRTC peer {Id} created; total={Count}\n--- SDP ANSWER ---\n{Sdp}\n--- END SDP ---", id, _peers.Count, answerSdp);
         return (answerSdp, id.ToString());
     }
