@@ -36,6 +36,15 @@ public class H264Transcoder : IAsyncDisposable
     /// Listeners must be quick; blocking here stalls the encoder's output pipe.</summary>
     public event Action<byte[]>? NaluReady;
 
+    /// <summary>Fires once per access unit (= one decoded frame), driven by AUD
+    /// NAL units that ffmpeg emits when -x264-params aud=1 is set. Subscribers
+    /// use this to advance their RTP timestamp — same timestamp must be
+    /// applied to every NAL inside one access unit so the decoder can
+    /// reassemble the frame correctly. Without this, slice-max-size cuts a
+    /// frame into ~10 NALs and each one was receiving a different timestamp,
+    /// stalling the receiver's frame buffer indefinitely.</summary>
+    public event Action? FrameBoundary;
+
     public void Start(int targetFps, int crf)
     {
         lock (_lock)
@@ -64,6 +73,13 @@ public class H264Transcoder : IAsyncDisposable
                 "-preset", "ultrafast",
                 "-tune", "zerolatency",
                 "-pix_fmt", "yuv420p",
+                // Lock to Baseline 3.1 to match the profile-level-id=42001f
+                // SIPSorcery negotiates on PT 103. Constrained Baseline 3.2
+                // (libx264 default with `ultrafast`) is *probably* compatible,
+                // but iOS/some browsers will silently drop packets if the
+                // declared profile and the SPS-level fields disagree.
+                "-profile:v", "baseline",
+                "-level", "3.1",
                 // CBR-ish bitrate cap. Earlier this used `-crf` which let
                 // libx264 spend whatever it wanted on noisy mono astronomy
                 // frames — 16 Mbps of output overwhelms RTP fragmentation
@@ -82,7 +98,11 @@ public class H264Transcoder : IAsyncDisposable
                 // fragmentation which SIPSorcery's H.264 packetizer doesn't
                 // currently emit — symptom is "peer connected, decoder waits
                 // forever, canvas stays black".
-                "-x264-params", "slice-max-size=1100:keyint_min=" + Math.Max(2, targetFps / 2),
+                // aud=1 emits an Access Unit Delimiter NAL (type 9) at the
+                // start of every frame — used by FrameBoundary subscribers
+                // to advance the RTP timestamp once per frame, not once per
+                // slice/NAL.
+                "-x264-params", "slice-max-size=1100:keyint_min=" + Math.Max(2, targetFps / 2) + ":aud=1",
                 "-bsf:v", "dump_extra=freq=keyframe",
                 "-f", "h264", "pipe:1"
             });
@@ -190,8 +210,21 @@ public class H264Transcoder : IAsyncDisposable
                     int naluEnd = next;
                     var nalu = new byte[naluEnd - naluStart];
                     Array.Copy(bytes, naluStart, nalu, 0, nalu.Length);
-                    try { NaluReady?.Invoke(nalu); }
-                    catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
+                    // NAL header low 5 bits = nal_unit_type. Type 9 = AUD,
+                    // marks the start of a new access unit (frame). Emit a
+                    // FrameBoundary instead of treating the AUD as content;
+                    // RTP receivers only need the AUD to detect frame edges
+                    // when the encoder splits frames into multiple slices.
+                    if (nalu.Length > 0 && (nalu[0] & 0x1F) == 9)
+                    {
+                        try { FrameBoundary?.Invoke(); }
+                        catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
+                    }
+                    else
+                    {
+                        try { NaluReady?.Invoke(nalu); }
+                        catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
+                    }
 
                     pos = next;
                     startCodeLen = nextStartLen;
