@@ -534,11 +534,12 @@ public class CameraController : ControllerBase
     {
         var exp = request?.ExposureSeconds ?? _stream.ExposureSeconds;
         var fps = request?.MaxFps ?? _stream.MaxFps;
-        _stream.Configure(exp, fps, request?.BinX, request?.BinY, request?.Gain);
+        _stream.Configure(exp, fps, request?.BinX, request?.BinY, request?.Gain,
+            request?.RoiW, request?.RoiH, request?.RoiCx, request?.RoiCy);
         try
         {
             await _stream.StartAsync(HttpContext.RequestAborted);
-            return Ok(new { success = true, exposureSeconds = exp, maxFps = fps, binX = request?.BinX, binY = request?.BinY, gain = request?.Gain });
+            return Ok(new { success = true, exposureSeconds = exp, maxFps = fps });
         }
         catch (Exception ex)
         {
@@ -554,13 +555,25 @@ public class CameraController : ControllerBase
     }
 
     [HttpPost("stream/configure")]
-    public IActionResult StreamConfigure([FromBody] StreamConfigRequest request)
+    public async Task<IActionResult> StreamConfigure([FromBody] StreamConfigRequest request)
     {
-        _stream.Configure(request.ExposureSeconds, request.MaxFps, request.BinX, request.BinY, request.Gain);
+        // ConfigureAndApplyAsync restarts the live stream when ROI / binning
+        // changed — INDI drivers won't honor a mid-stream CCD_FRAME update,
+        // so the user wouldn't actually see the smaller BLOB without it.
+        await _stream.ConfigureAndApplyAsync(
+            request.ExposureSeconds, request.MaxFps, request.BinX, request.BinY, request.Gain,
+            request.RoiW, request.RoiH, request.RoiCx, request.RoiCy,
+            HttpContext.RequestAborted);
         return Ok(new { success = true, exposureSeconds = _stream.ExposureSeconds, maxFps = _stream.MaxFps });
     }
 
-    public record StreamConfigRequest(double ExposureSeconds, double MaxFps, int? BinX = null, int? BinY = null, int? Gain = null);
+    /// <summary>StreamConfigRequest fields all optional. ROI fields are
+    /// fractions of sensor (0..1): RoiW/RoiH are window size, RoiCx/RoiCy
+    /// are center position. iOS LiveView translates user gestures to these
+    /// before posting; server does the sensor-pixel arithmetic.</summary>
+    public record StreamConfigRequest(double ExposureSeconds, double MaxFps,
+        int? BinX = null, int? BinY = null, int? Gain = null,
+        double? RoiW = null, double? RoiH = null, double? RoiCx = null, double? RoiCy = null);
 
     // ----- SER/AVI recording (driver-native) -----
     // The INDI driver owns the file — we just flip switches. Default output:
@@ -692,17 +705,34 @@ public class CameraController : ControllerBase
         if (selected?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Camera))
             return StatusCode(503, new { success = false, message = "No INDI camera connected" });
 
-        var mode = (request?.Mode ?? "manual").ToLowerInvariant() switch
+        // Server-side safety cap: clients can request "manual" but we always
+        // route through the duration path with a 60 s ceiling. This keeps a
+        // forgotten Stop button from filling the disk with a 300 GB SER —
+        // an actual incident on this build (twice). Callers who genuinely
+        // want a longer take can pass duration explicitly up to the cap;
+        // beyond that the client should compose multiple clips.
+        const int kMaxDurationSeconds = 60;
+        var requestedMode = (request?.Mode ?? "manual").ToLowerInvariant();
+        var requestedDuration = request?.DurationSeconds ?? 0;
+        IndiDiscoveryService.RecordMode mode;
+        int durationSec;
+        if (requestedMode == "frames")
         {
-            "duration" => IndiDiscoveryService.RecordMode.Duration,
-            "frames"   => IndiDiscoveryService.RecordMode.Frames,
-            _          => IndiDiscoveryService.RecordMode.Manual
-        };
+            mode = IndiDiscoveryService.RecordMode.Frames;
+            durationSec = 0;
+        }
+        else
+        {
+            // Both "manual" (no caller-specified duration) and "duration"
+            // collapse to bounded duration mode.
+            mode = IndiDiscoveryService.RecordMode.Duration;
+            durationSec = requestedDuration > 0
+                ? Math.Min(requestedDuration, kMaxDurationSeconds)
+                : kMaxDurationSeconds;
+        }
 
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var dir = Path.Combine(home, "BeyondStellar", "captures", "videos");
-        // __T_ is the INDI driver's runtime timestamp macro — safer than us baking a timestamp
-        // because the driver also renames if the target file exists.
         var baseName = string.IsNullOrWhiteSpace(request?.Filename)
             ? "stream_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + "_" + "__T_"
             : request.Filename + "_" + "__T_";
@@ -710,9 +740,17 @@ public class CameraController : ControllerBase
         try
         {
             await _indi.StartRecordingAsync(selected.UniqueId, mode,
-                request?.DurationSeconds ?? 0, request?.FrameCount ?? 0,
+                durationSec, request?.FrameCount ?? 0,
                 dir, baseName, HttpContext.RequestAborted);
-            return Ok(new { success = true, message = "Recording started", mode = mode.ToString(), dir, filename = baseName });
+            return Ok(new {
+                success = true,
+                message = "Recording started",
+                mode = mode.ToString(),
+                durationSeconds = durationSec,
+                cappedFromManual = requestedMode == "manual",
+                dir,
+                filename = baseName
+            });
         }
         catch (Exception ex)
         {
@@ -737,7 +775,11 @@ public class CameraController : ControllerBase
         if (selected?.Provider != EquipmentProvider.Indi)
             return Ok(new { running = false });
         var s = _indi.GetRecordingStatus(selected.UniqueId);
-        return Ok(new { running = s.running, mode = s.activeSwitch, dir = s.dir, filename = s.filename });
+        // Camera-side BLOB delivery rate — this is the rate the SER file is actually
+        // being written at, as opposed to the (capped) ffmpeg/WebRTC transmission fps
+        // the viewfinder shows. Surfacing this lets the user judge whether their
+        // exposure / gain settings are giving them the planetary fps they want.
+        return Ok(new { running = s.running, mode = s.activeSwitch, dir = s.dir, filename = s.filename, fps = _stream.LastFps });
     }
 
     [HttpPost("abort")]

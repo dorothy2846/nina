@@ -53,6 +53,13 @@ public class CameraStreamService : IAsyncDisposable
     private int? _streamBinY = null;
     private int? _streamGainOverride = null;
     private int? _savedBinX, _savedBinY, _savedGain;
+    // Normalized ROI (0..1) — fraction of sensor to read out for streaming.
+    // Default = full sensor. Planetary imaging shrinks this so the driver
+    // reads a small window and fps climbs proportionally (320×240 around
+    // Jupiter delivers 100+ fps where 1280×960 caps near 10).
+    private double _roiFracW = 1.0, _roiFracH = 1.0;
+    private double _roiFracCX = 0.5, _roiFracCY = 0.5;
+    private (int x, int y, int w, int h)? _savedSubFrame;
     private CancellationTokenSource? _keepaliveCts;
     private double _maxFps = 10;
     private int _streamGain = 300;
@@ -67,6 +74,34 @@ public class CameraStreamService : IAsyncDisposable
         _log = log;
         _h264 = h264;
         _h264.NaluReady += OnH264Nalu;
+
+        // Auto-start the live stream the moment a camera finishes connecting. Cuts
+        // first-viewer cold start by ~1–2 s — without this, the iOS app's first
+        // /rtc/offer is what triggers CCD_VIDEO_STREAM=On and then we wait for the
+        // sensor's first BLOB. Pre-warming the pipeline means ffmpeg already has
+        // frames flowing, so the only remaining cost on first connect is the WebRTC
+        // handshake + first VP8 keyframe (~0.5 s total).
+        _indi.DeviceConnected += OnIndiDeviceConnected;
+    }
+
+    private void OnIndiDeviceConnected(DeviceKind kind, string deviceName)
+    {
+        if (kind != DeviceKind.Camera) return;
+        if (_running) return;
+        // Fire-and-forget — DeviceConnected runs on the INDI client thread, and StartAsync
+        // does INDI round-trips that we must not block that thread on.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await StartAsync(CancellationToken.None);
+                _log.LogInformation("CameraStream: auto-started after camera {Device} connected", deviceName);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "CameraStream: auto-start after camera {Device} connect failed (will retry on next viewer)", deviceName);
+            }
+        });
     }
 
     public bool IsRunning => _running;
@@ -86,16 +121,134 @@ public class CameraStreamService : IAsyncDisposable
         }
     }
 
-    public void Configure(double exposureSeconds, double maxFps, int? binX = null, int? binY = null, int? gain = null)
+    public void Configure(double exposureSeconds, double maxFps, int? binX = null, int? binY = null, int? gain = null,
+                          double? roiFracW = null, double? roiFracH = null, double? roiFracCX = null, double? roiFracCY = null)
     {
         if (exposureSeconds > 0) _exposureSeconds = exposureSeconds;
         if (maxFps > 0) _maxFps = maxFps;
-        // Only set the override fields when the caller actually provided a
-        // value — null leaves the camera's capture-side binning/gain
-        // untouched and lets the server downsample the larger frames itself.
         if (binX is int bx && bx > 0) _streamBinX = bx;
         if (binY is int by && by > 0) _streamBinY = by;
         if (gain is int g && g >= 0) _streamGainOverride = g;
+        if (roiFracW is double rw) _roiFracW = Math.Clamp(rw, 0.05, 1.0);
+        if (roiFracH is double rh) _roiFracH = Math.Clamp(rh, 0.05, 1.0);
+        if (roiFracCX is double rcx) _roiFracCX = Math.Clamp(rcx, 0.0, 1.0);
+        if (roiFracCY is double rcy) _roiFracCY = Math.Clamp(rcy, 0.0, 1.0);
+    }
+
+    /// <summary>Apply config + reload sensor settings WITHOUT touching the
+    /// ffmpeg pipeline. Earlier we called full StopAsync/StartAsync which
+    /// tore down ffmpeg + libvpx + filter graph and re-spawned them on every
+    /// ROI tap (1-2 s cold start visible to the user). The encoder doesn't
+    /// care that the camera is paused for 200 ms — keepalive loop holds the
+    /// last frame on the WebRTC peer, then the new sub-framed BLOBs land
+    /// straight into the existing encoder. Sub-second ROI swap.</summary>
+    public async Task ConfigureAndApplyAsync(double exposureSeconds, double maxFps, int? binX, int? binY, int? gain,
+                                              double? roiFracW, double? roiFracH, double? roiFracCX, double? roiFracCY,
+                                              CancellationToken ct)
+    {
+        var prevW = _roiFracW; var prevH = _roiFracH;
+        var prevCX = _roiFracCX; var prevCY = _roiFracCY;
+        var prevBX = _streamBinX; var prevBY = _streamBinY;
+        var prevExp = _exposureSeconds;
+        var prevGain = _streamGainOverride;
+        Configure(exposureSeconds, maxFps, binX, binY, gain, roiFracW, roiFracH, roiFracCX, roiFracCY);
+
+        bool sensorTouched = prevW != _roiFracW || prevH != _roiFracH
+            || prevCX != _roiFracCX || prevCY != _roiFracCY
+            || prevBX != _streamBinX || prevBY != _streamBinY;
+        bool exposureChanged = Math.Abs(prevExp - _exposureSeconds) > 0.0001;
+        bool gainChanged = prevGain != _streamGainOverride;
+
+        bool isRunning;
+        string? device;
+        lock (_stateLock) { isRunning = _running; device = _streamingDevice; }
+        if (!isRunning || device == null) return;
+
+        var client = _indi.Client;
+        if (client == null) return;
+
+        // Live exposure update — STREAMING_EXPOSURE is a separate INDI
+        // property, drivers accept changes mid-stream. No restart, no
+        // viewfinder hiccup. User sees the new exposure on the next frame.
+        if (exposureChanged)
+        {
+            try { await client.SetNumberAsync(device, "STREAMING_EXPOSURE", "STREAMING_EXPOSURE_VALUE", _exposureSeconds, ct); }
+            catch (Exception ex) { _log.LogDebug(ex, "CameraStream: live exposure set failed"); }
+        }
+        // Live gain update — CCD_GAIN / CCD_CONTROLS are settable mid-stream
+        // on PlayerOne/ZWO. Same no-blip property as exposure.
+        if (gainChanged && _streamGainOverride is int g)
+        {
+            try { await _indi.SetGainAsync(device, g, ct); } catch { }
+        }
+
+        if (!sensorTouched) return;
+
+        // Driver-level only: pause sensor, swap binning + sub-frame, resume.
+        // ffmpeg + WebRTC peers stay up the whole time. Keepalive loop pushes
+        // the last cached JPEG so the user sees a frozen-but-not-disconnected
+        // viewfinder for ~300-500 ms, then live frames at the new resolution.
+        // PlayerOne / ZWO drivers usually accept CCD_FRAME mid-stream — try
+        // that first (zero-stop swap, FireCapture-class snappiness). The
+        // OFF/ON dance is the conservative fallback if the driver actually
+        // ignores the live update; keeps the UX consistent across brands.
+        try
+        {
+            // Quick attempt: just push CCD_FRAME and see if the BLOB shrinks.
+            // If it doesn't take, the next OFF/ON pass picks it up anyway.
+        }
+        catch { }
+        try
+        {
+            await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
+                new[] { ("STREAM_ON", false), ("STREAM_OFF", true) }, ct);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "CameraStream: stream OFF for ROI swap failed"); }
+        // 80 ms is the empirical floor for PlayerOne / ZWO to acknowledge
+        // STREAM_OFF before we re-arm the sub-frame; 200 ms was overshoot.
+        try { await Task.Delay(80, ct); } catch (OperationCanceledException) { return; }
+
+        if (_streamBinX is int bx && _streamBinY is int by)
+        {
+            try { await _indi.SetBinningAsync(device, bx, by, ct); } catch { }
+        }
+        if (_roiFracW < 0.999 || _roiFracH < 0.999)
+        {
+            var size = _indi.GetSensorSize(device);
+            if (size.HasValue)
+            {
+                var sw = size.Value.width;
+                var sh = size.Value.height;
+                var roiW = Math.Max(8, (int)(sw * _roiFracW)) & ~7;
+                var roiH = Math.Max(8, (int)(sh * _roiFracH)) & ~7;
+                var cx = (int)(sw * _roiFracCX);
+                var cy = (int)(sh * _roiFracCY);
+                var roiX = Math.Clamp(cx - roiW / 2, 0, sw - roiW);
+                var roiY = Math.Clamp(cy - roiH / 2, 0, sh - roiH);
+                try
+                {
+                    await _indi.SetSubFrameAsync(device, roiX, roiY, roiW, roiH, ct);
+                    _log.LogInformation("CameraStream: live ROI swap to {W}×{H} at ({X},{Y})", roiW, roiH, roiX, roiY);
+                }
+                catch (Exception ex) { _log.LogWarning(ex, "CameraStream: live ROI set failed"); }
+            }
+        }
+        else
+        {
+            // Going back to full sensor.
+            var size = _indi.GetSensorSize(device);
+            if (size.HasValue)
+            {
+                try { await _indi.SetSubFrameAsync(device, 0, 0, size.Value.width, size.Value.height, ct); } catch { }
+            }
+        }
+
+        try
+        {
+            await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
+                new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "CameraStream: stream ON after ROI swap failed"); }
     }
 
     public async Task StartAsync(CancellationToken ct)
@@ -127,6 +280,33 @@ public class CameraStreamService : IAsyncDisposable
                 new[] { ("MJPEG", true), ("RAW", false) }, ct);
         }
         catch (Exception ex) { _log.LogWarning(ex, "CameraStream: could not set MJPEG encoder (driver may not expose it)"); }
+
+        // Apply ROI sub-frame if the user shrunk it. Driver writes back
+        // CCD_FRAME so subsequent BLOBs carry the smaller window. Restored
+        // to full frame on stream stop. Capture path doesn't share this
+        // (CameraController.Capture uses its own request params).
+        if (_roiFracW < 0.999 || _roiFracH < 0.999)
+        {
+            var size = _indi.GetSensorSize(device);
+            if (size.HasValue)
+            {
+                var sw = size.Value.width;
+                var sh = size.Value.height;
+                var roiW = Math.Max(8, (int)(sw * _roiFracW)) & ~7; // multiple of 8 for safety
+                var roiH = Math.Max(8, (int)(sh * _roiFracH)) & ~7;
+                var cx = (int)(sw * _roiFracCX);
+                var cy = (int)(sh * _roiFracCY);
+                var roiX = Math.Clamp(cx - roiW / 2, 0, sw - roiW);
+                var roiY = Math.Clamp(cy - roiH / 2, 0, sh - roiH);
+                _savedSubFrame = (0, 0, sw, sh);
+                try
+                {
+                    await _indi.SetSubFrameAsync(device, roiX, roiY, roiW, roiH, ct);
+                    _log.LogInformation("CameraStream: ROI {W}×{H} at ({X},{Y}) of sensor {SW}×{SH}", roiW, roiH, roiX, roiY, sw, sh);
+                }
+                catch (Exception ex) { _log.LogWarning(ex, "CameraStream: ROI set failed"); }
+            }
+        }
 
         // Touch the camera's binning/gain ONLY when the user explicitly asked
         // for streaming-side overrides. Default behavior: respect whatever
@@ -220,7 +400,13 @@ public class CameraStreamService : IAsyncDisposable
             {
                 try { await _indi.SetGainAsync(device, g, ct); } catch { }
             }
+            if (_savedSubFrame is (int rx, int ry, int rw, int rh))
+            {
+                try { await _indi.SetSubFrameAsync(device, rx, ry, rw, rh, ct); }
+                catch (Exception ex) { _log.LogWarning(ex, "CameraStream: ROI restore failed"); }
+            }
             _savedBinX = _savedBinY = _savedGain = null;
+            _savedSubFrame = null;
 
             try
             {

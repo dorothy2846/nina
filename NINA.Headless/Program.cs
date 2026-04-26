@@ -66,6 +66,9 @@ builder.Services.AddHostedService<NINA.Headless.Services.Network.BootCounterServ
 // our Azure signaling server on boot; iOS app (controller) dials in by machineId.
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.ObservatoryIdentity>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.PairedDeviceStore>();
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.OwnerAccountStore>();
+builder.Services.AddHttpClient(); // SupabaseAuthService consumes the named "supabase" client
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.SupabaseAuthService>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousConfigStore>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RemoteEventBus>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousClient>();
@@ -78,6 +81,10 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiDiscoveryServi
 builder.Services.AddSingleton<CaptureStore>();
 builder.Services.AddSingleton<H264Transcoder>();
 builder.Services.AddSingleton<CameraStreamService>();
+
+// Auto-recovery for hung INDI driver processes. Runs as a hosted service so
+// it's active across the whole server lifetime, not gated on a controller hit.
+builder.Services.AddHostedService<NINA.Headless.Services.DriverWatchdogService>();
 builder.Services.AddSingleton<WebRTCService>();
 builder.Services.AddSingleton<FlatWizardService>();
 builder.Services.AddSingleton<CalibrationBatchService>();
@@ -184,5 +191,51 @@ app.MapGet("/gen_204", () => Results.StatusCode(204));                          
 
 // Eagerly resolve NinaStateService so it registers as mediator consumer on startup
 app.Services.GetRequiredService<NinaStateService>();
+
+// Eagerly resolve CameraStreamService so it subscribes to IndiDiscoveryService.DeviceConnected
+// before any camera can come online. Without this, the service is only constructed on the
+// first /ws/camera/stream or /api/v1/camera/stream/configure request — by which time the
+// auto-start-on-connect window has already passed and the user pays the cold-start cost
+// they were trying to avoid.
+app.Services.GetRequiredService<NINA.Headless.Services.CameraStreamService>();
+
+// Pre-launch the H.264 / VP8 transcoder at startup. ffmpeg + libvpx +
+// filter-graph init takes 1-2 s on first launch; doing it once at server
+// start instead of on every first viewer connect makes the cold-start
+// stream visible in well under a second instead of 3-4 s. ffmpeg sits
+// idle waiting on stdin until the first BLOB arrives — CPU cost is ~0.
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        var h264 = app.Services.GetRequiredService<NINA.Headless.Services.H264Transcoder>();
+        h264.Start(targetFps: 10, crf: 26);
+        app.Logger.LogInformation("H264Transcoder pre-launched at startup");
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogWarning(ex, "H264Transcoder pre-launch failed; will start lazily on first stream");
+    }
+
+    // Pre-warm the SIPSorcery WebRTC stack: build + close a throw-away
+    // RTCPeerConnection so DTLS / SCTP / RTP modules JIT-compile + load
+    // their root certificates now instead of during the first viewer's
+    // /rtc/offer round-trip. Real measurement showed the very first peer
+    // creation costing ~600 ms more than subsequent ones.
+    _ = Task.Run(() =>
+    {
+        try
+        {
+            var dummy = new SIPSorcery.Net.RTCPeerConnection(
+                new SIPSorcery.Net.RTCConfiguration { iceServers = new List<SIPSorcery.Net.RTCIceServer>() });
+            dummy.Close("pre-warm");
+            app.Logger.LogInformation("WebRTC factory pre-warmed");
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogDebug(ex, "WebRTC pre-warm failed (non-fatal)");
+        }
+    });
+});
 
 app.Run();

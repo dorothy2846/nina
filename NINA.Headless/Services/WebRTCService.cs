@@ -46,13 +46,18 @@ public class WebRTCService
         _naluHandlerAttached = true;
     }
 
-    /// <summary>RTP timestamp from wall-clock (90 kHz). Hard-coding +9000
-    /// per frame assumed an exact 10 fps cadence; the real pipeline runs
-    /// closer to 2.5 fps and varies, so the timestamp ran ~4× faster than
-    /// real time. Chrome's jitter buffer compensates by holding frames
-    /// until the timestamp catches up — visible to the user as multi-second
-    /// playback lag. Wall-clock fixes this and matches what live encoders
-    /// actually emit on the wire.</summary>
+    /// <summary>RTP timestamp from wall-clock (90 kHz). The previous fixed
+    /// +9000-per-frame variant assumed actual fps == target fps; if delivery
+    /// drops to 5 fps (long exposure, driver hiccup) the receiver perceives
+    /// every frame as "100 ms late" and grows its jitter buffer back to the
+    /// 6 s territory we're trying to escape. Wall-clock makes RTP TS deltas
+    /// match real send cadence, so any fps wobble shows up uniformly on both
+    /// sender and receiver sides — no perceived inter-arrival jitter.
+    ///
+    /// Pairs with the `playout-delay` RTP header extension we attach to
+    /// every outgoing video packet: that's what actually pins the iOS
+    /// receiver's playout delay to zero and keeps it there regardless of
+    /// what its jitter algorithm computes.</summary>
     private long _streamStartTicks;
     private void OnFrameBoundary()
     {
@@ -64,12 +69,6 @@ public class WebRTCService
             startTicks = Volatile.Read(ref _streamStartTicks);
         }
         var elapsedTicks = DateTime.UtcNow.Ticks - startTicks;
-        // 1 second = 10_000_000 ticks (100 ns each). 90 kHz means 90_000
-        // RTP units per second, so factor = 90_000 / 10_000_000 = 9 / 1000.
-        // Earlier `* 9 / 1_000_000` was off by 1000× — RTP timestamps grew
-        // 1000× too slowly, so chrome's jitter buffer interpreted every
-        // arrival as "way ahead of media time" and queued frames forever
-        // (visible as jitterBuf monotonically rising 22 → 1384 ms).
         _rtpTimestamp = (uint)(elapsedTicks * 9 / 1000);
         Interlocked.Increment(ref _frameCount);
         MaybeLog();
@@ -107,14 +106,13 @@ public class WebRTCService
         await _stream.StartAsync(CancellationToken.None); // ensures H264Transcoder is running
         AttachNaluHandler();
 
+        // No STUN servers — this path is LAN-only; the iOS LiveView WebRTC
+        // path strips them client-side too. Skipping STUN cuts ~500 ms off
+        // ICE gathering. Remote-mode video (RendezvousRemoteClient) brings
+        // its own STUN/TURN list when that path lands.
         var config = new RTCConfiguration
         {
-            iceServers = new List<RTCIceServer>
-            {
-                // Public STUN so the peer can discover its reflexive candidate; required when
-                // the client connects from outside the LAN. Inside the LAN it's unused.
-                new RTCIceServer { urls = "stun:stun.l.google.com:19302" }
-            }
+            iceServers = new List<RTCIceServer>()
         };
 
         var peer = new RTCPeerConnection(config);
@@ -163,6 +161,65 @@ public class WebRTCService
         // (profile-level-id rewrite no longer applies — codec is VP8 now.)
         _log.LogInformation("WebRTC peer {Id} created; total={Count}\n--- SDP ANSWER ---\n{Sdp}\n--- END SDP ---", id, _peers.Count, answerSdp);
         return (answerSdp, id.ToString());
+    }
+
+    /// <summary>Inserts an `a=extmap:&lt;id&gt; ...playout-delay` line into the
+    /// video m= section of the offer if it's not already present and the
+    /// requested id isn't already taken. Picks the first non-conflicting id
+    /// at or above the requested one (so if iOS ever ships an offer that
+    /// already uses 5, we slide to 6/7/etc).</summary>
+    private static string InjectPlayoutDelayExtmap(string offerSdp, int requestedId)
+    {
+        const string uri = PlayoutDelayExtension.RTP_HEADER_EXTENSION_URI;
+        if (offerSdp.Contains(uri)) return offerSdp; // already present
+
+        // Collect taken extmap ids in the m=video section so we don't collide.
+        var lines = offerSdp.Split('\n');
+        var inVideo = false;
+        var taken = new HashSet<int>();
+        foreach (var raw in lines)
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.StartsWith("m="))
+            {
+                inVideo = line.StartsWith("m=video");
+                continue;
+            }
+            if (!inVideo) continue;
+            if (line.StartsWith("a=extmap:"))
+            {
+                var rest = line.Substring("a=extmap:".Length);
+                var spaceIx = rest.IndexOf(' ');
+                if (spaceIx > 0 && int.TryParse(rest.Substring(0, spaceIx), out var id))
+                    taken.Add(id);
+            }
+        }
+        var chosen = requestedId;
+        while (taken.Contains(chosen)) chosen++;
+
+        // Splice the new extmap line right before the m=audio line if any,
+        // otherwise just append to the end. Keeps line ordering tidy enough
+        // for downstream parsers.
+        var insert = $"a=extmap:{chosen} {uri}";
+        var sb = new System.Text.StringBuilder(offerSdp.Length + insert.Length + 4);
+        var inserted = false;
+        var inVideoSection = false;
+        foreach (var raw in lines)
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.StartsWith("m="))
+            {
+                if (inVideoSection && !inserted)
+                {
+                    sb.Append(insert).Append("\r\n");
+                    inserted = true;
+                }
+                inVideoSection = line.StartsWith("m=video");
+            }
+            sb.Append(line).Append("\r\n");
+        }
+        if (inVideoSection && !inserted) sb.Append(insert).Append("\r\n");
+        return sb.ToString();
     }
 
     public Task ClosePeerAsync(string peerId)

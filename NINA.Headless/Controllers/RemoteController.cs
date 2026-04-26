@@ -11,12 +11,17 @@ public class RemoteController : ControllerBase
     private readonly RendezvousConfigStore _store;
     private readonly ObservatoryIdentity _identity;
     private readonly PairedDeviceStore _paired;
+    private readonly OwnerAccountStore _owner;
+    private readonly SupabaseAuthService _supabase;
 
-    public RemoteController(RendezvousConfigStore store, ObservatoryIdentity identity, PairedDeviceStore paired)
+    public RemoteController(RendezvousConfigStore store, ObservatoryIdentity identity, PairedDeviceStore paired,
+        OwnerAccountStore owner, SupabaseAuthService supabase)
     {
         _store = store;
         _identity = identity;
         _paired = paired;
+        _owner = owner;
+        _supabase = supabase;
     }
 
     /// <summary>Unauthenticated metadata read-out. iOS calls this during LAN
@@ -46,7 +51,15 @@ public class RemoteController : ControllerBase
                 nickname = d.Nickname,
                 pairedAt = d.PairedAt,
                 lastSeenAt = d.LastSeenAt
-            })
+            }),
+            // Account-based ownership snapshot. Surfacing both the owner UUID and
+            // the co-owner list lets the iOS settings UI show "this is your
+            // observatory" vs "you're a co-owner here" vs "unclaimed". UUIDs
+            // aren't secrets — Supabase exposes them on every authenticated
+            // request to its own API — so this stays on the unauthenticated
+            // /config endpoint alongside paired devices.
+            ownerAccount = _owner.Owner,
+            coOwnerAccounts = _owner.ListCoOwners()
         });
     }
 
@@ -124,6 +137,35 @@ public class RemoteController : ControllerBase
         return ok ? NoContent() : NotFound();
     }
 
+    public record CoOwnerRequest(string UserUuid);
+
+    /// <summary>Owner-only: invite another Supabase account to share access to
+    /// this observatory. The supplied UUID gets pushed onto the co-owner list;
+    /// any subsequent authenticated request whose JWT resolves to that UUID
+    /// passes IsAuthorizedAsync. Re-adding an existing co-owner is a no-op.
+    /// Returns the updated list so the UI can refresh without a second call.</summary>
+    [HttpPost("co-owners")]
+    public async Task<IActionResult> AddCoOwner([FromBody] CoOwnerRequest req)
+    {
+        if (!await IsAuthorizedAsync()) return Forbid();
+        if (string.IsNullOrWhiteSpace(req?.UserUuid))
+            return BadRequest(new { error = "missing_userUuid" });
+        var coOwners = _owner.AddCoOwner(req.UserUuid.Trim());
+        return Ok(new { owner = _owner.Owner, coOwners });
+    }
+
+    /// <summary>Owner-only: revoke a co-owner. Idempotent — removing someone
+    /// not on the list returns the unchanged list. Doesn't kill any active
+    /// connection from the removed account; that drops naturally on the next
+    /// request when IsAuthorizedAsync returns false.</summary>
+    [HttpDelete("co-owners/{userUuid}")]
+    public async Task<IActionResult> RemoveCoOwner(string userUuid)
+    {
+        if (!await IsAuthorizedAsync()) return Forbid();
+        _owner.RemoveCoOwner(userUuid);
+        return Ok(new { owner = _owner.Owner, coOwners = _owner.ListCoOwners() });
+    }
+
     public record FactoryResetRequest(string Confirm);
 
     /// <summary>Nuke the observatory's identity + paired device list. Used when
@@ -136,17 +178,44 @@ public class RemoteController : ControllerBase
         if (!await IsAuthorizedAsync()) return Forbid();
         if (req.Confirm != "RESET") return BadRequest(new { error = "missing_confirm" });
         _paired.Clear();
+        _owner.Reset();
         _identity.Reset();
         return NoContent();
     }
 
-    /// <summary>Bearer token check against PairedDeviceStore. Only used for the
-    /// admin endpoints on this controller — WebRTC signaling path does its own
-    /// token check in RendezvousClient before accepting an offer.</summary>
-    private Task<bool> IsAuthorizedAsync()
+    /// <summary>Two-tier auth check used by every owner-only endpoint on this
+    /// controller. Order matters:
+    ///   1. Treat the bearer as a Supabase access token. If it verifies AND
+    ///      either (a) the observatory has no owner yet (auto-claim) or
+    ///      (b) the verified UUID is the owner / a co-owner — accept.
+    ///   2. Fall back to the legacy LAN-trust bearer token if the Supabase
+    ///      path didn't resolve. This keeps no-internet field deployments
+    ///      working: a phone that paired on the LAN before the observatory
+    ///      ever saw the Internet still has a valid token to use.
+    ///
+    /// The fallback runs unconditionally — we don't gate it on "request came
+    /// from LAN" because the rendezvous-tunnelled HTTP path forwards LAN
+    /// requests with the loopback IP as the source. Filtering by source IP
+    /// here would break legitimate remote-via-rendezvous calls. The actual
+    /// security gate is "must possess a token that was minted on the LAN
+    /// at some point", which is exactly what the legacy model gives us.</summary>
+    private async Task<bool> IsAuthorizedAsync()
     {
         var auth = Request.Headers.Authorization.ToString();
         var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? auth[7..].Trim() : "";
-        return Task.FromResult(_paired.Verify(token) != null);
+        if (string.IsNullOrEmpty(token)) return false;
+
+        var uuid = await _supabase.VerifyAsync(token, HttpContext.RequestAborted);
+        if (uuid != null)
+        {
+            if (_owner.IsAuthorized(uuid)) return true;
+            if (_owner.TryClaim(uuid)) return true;
+            // Verified Supabase user but not owner / not first-claimer.
+            return false;
+        }
+
+        // Supabase verify returned null — either offline, or the bearer is
+        // a legacy LAN-trust token. Try that path.
+        return _paired.Verify(token) != null;
     }
 }

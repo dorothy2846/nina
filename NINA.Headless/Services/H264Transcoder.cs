@@ -26,10 +26,31 @@ public class H264Transcoder : IAsyncDisposable
     private Task? _readerTask;
     private CancellationTokenSource? _readerCts;
     private readonly object _lock = new();
+    // Last-seen ffmpeg output liveness signal. Set on every IVF frame the
+    // reader loop pulls, read by the watchdog to spot stalls. UTC ticks +
+    // Volatile so the cross-thread read doesn't tear without a lock.
+    private long _lastFrameTicks;
+    // Cached last-Start args so the watchdog can call Restart() without
+    // having to thread the original target fps / crf through every site.
+    private int _lastTargetFps;
+    private int _lastCrf;
 
     public H264Transcoder(ILogger<H264Transcoder> log) { _log = log; }
 
     public bool IsRunning => _proc != null && !_proc.HasExited;
+
+    /// <summary>UTC time of the most recent IVF frame emitted by ffmpeg.
+    /// <see cref="DateTime.MinValue"/> until the first frame lands. Watchdog
+    /// reads this; a too-old value while the encoder claims to be running
+    /// indicates ffmpeg has wedged on input.</summary>
+    public DateTime LastFrameAt
+    {
+        get
+        {
+            var ticks = Volatile.Read(ref _lastFrameTicks);
+            return ticks == 0 ? DateTime.MinValue : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
 
     /// <summary>Invoked from the reader thread for every complete NAL unit, sans start code.
     /// First byte is the standard H.264 NAL header (forbidden-zero-bit + nal_ref_idc + nal_unit_type).
@@ -49,6 +70,8 @@ public class H264Transcoder : IAsyncDisposable
     {
         lock (_lock)
         {
+            _lastTargetFps = targetFps;
+            _lastCrf = crf;
             if (IsRunning) return;
 
             // `normalize` ≈ linear min/max autostretch but smoothed over a window of frames
@@ -58,15 +81,19 @@ public class H264Transcoder : IAsyncDisposable
             // near-black pixels that look identical to the background.
             var args = string.Join(' ', new[]
             {
-                "-fflags", "nobuffer",
+                "-fflags", "nobuffer+discardcorrupt",
                 "-flags", "low_delay",
                 "-f", "image2pipe",
                 "-c:v", "mjpeg",
-                // Stamp frames with wall-clock time instead of a synthetic
-                // frame-index cadence — keeps RTP timestamps in sync with
-                // reality and stops chrome's jitter buffer from puffing up
-                // when the input rate diverges from the declared fps.
-                "-use_wallclock_as_timestamps", "1",
+                // Frame-index timestamps starting at zero. Earlier the wall-
+                // clock variant locked onto the BLOB-stream's first arrival
+                // wall time and drifted ~14 s ahead of `elapsed`, which fed
+                // chrome stale frames stamped with a fresh RTP timestamp —
+                // visible as a multi-second growing latency. Fresh-zero PTS
+                // avoids the lead entirely; RTP timestamping in
+                // WebRTCService.OnFrameBoundary already pulls real wall
+                // clock independently.
+                "-avoid_negative_ts", "make_zero",
                 "-i", "-",
                 // Server-side downsample (downscale-only). User's capture
                 // resolution comes through unchanged from the camera; we
@@ -83,7 +110,13 @@ public class H264Transcoder : IAsyncDisposable
                 "-b:v", "800k",
                 "-maxrate", "1500k",
                 "-bufsize", "1500k",
-                "-g", Math.Max(2, targetFps / 2).ToString(),
+                // Keyframe every 2 frames (~0.2s at 10fps). The cold-start cost is
+                // "wait for the next I-frame after the WebRTC peer attaches" — a
+                // 5-frame GOP added ~0.5s, a 2-frame GOP shaves that to ~0.2s. Bitrate
+                // climbs modestly because keyframes are bigger; LAN has the headroom
+                // and we already cap at 1.5 Mbps maxrate. Steady-state quality is
+                // unchanged because libvpx redistributes bits within the cap.
+                "-g", "2",
                 "-error-resilient", "1",
                 // libvpx defaults `lag-in-frames=25` — encoder waits for 25
                 // frames of look-ahead before emitting. At 2.5 input fps
@@ -214,6 +247,8 @@ public class H264Transcoder : IAsyncDisposable
                 var frame = new byte[frameSize];
                 if (!await ReadExactAsync(stdout, frame, ct)) return;
 
+                Volatile.Write(ref _lastFrameTicks, DateTime.UtcNow.Ticks);
+
                 try { FrameBoundary?.Invoke(); }
                 catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
                 try { NaluReady?.Invoke(frame); }
@@ -234,6 +269,22 @@ public class H264Transcoder : IAsyncDisposable
             total += n;
         }
         return true;
+    }
+
+    /// <summary>Stop the current ffmpeg child (if any) and re-spawn with the
+    /// last successful Start args. Used by the watchdog when ffmpeg appears
+    /// alive but isn't producing frames. Caller is responsible for the gap
+    /// between stop and start being acceptable — for our viewfinder use
+    /// case it's a sub-second blip the keepalive loop covers transparently.</summary>
+    public async Task RestartAsync()
+    {
+        int fps, crf;
+        lock (_lock) { fps = _lastTargetFps; crf = _lastCrf; }
+        await StopAsync();
+        // Reset liveness so the next watchdog tick doesn't immediately
+        // re-fire on a still-cold pipeline.
+        Volatile.Write(ref _lastFrameTicks, 0);
+        if (fps > 0) Start(fps, crf);
     }
 
     public async ValueTask DisposeAsync() => await StopAsync();

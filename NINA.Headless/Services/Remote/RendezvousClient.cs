@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using SIPSorcery.Net;
+using SIPSorceryMedia.Abstractions;
 
 namespace NINA.Headless.Services.Remote;
 
@@ -25,8 +26,21 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
     private readonly RendezvousConfigStore _store;
     private readonly RemoteEventBus _eventBus;
     private readonly PairedDeviceStore _paired;
+    private readonly OwnerAccountStore _owner;
+    private readonly SupabaseAuthService _supabase;
+    private readonly NINA.Headless.Services.H264Transcoder _h264;
+    private readonly NINA.Headless.Services.CameraStreamService _stream;
     private readonly ILogger<RendezvousClient> _log;
     private readonly HttpClient _loopback;
+
+    // Per-peer video transport state. Track is non-null only while a remote
+    // viewer is connected; we attach NALU/FrameBoundary handlers lazily on
+    // first hello-ack and detach on peer close so encoder ticks don't fan
+    // out into a dead RTCPeerConnection.
+    private MediaStreamTrack? _videoTrack;
+    private long _videoStreamStartTicks;
+    private uint _videoRtpTimestamp;
+    private bool _videoHandlersAttached;
 
     private ClientWebSocket? _ws;
     private RTCPeerConnection? _peer;
@@ -36,11 +50,18 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
     private readonly List<RTCIceCandidateInit> _pendingIce = new();
     private readonly object _peerLock = new();
 
-    public RendezvousClient(RendezvousConfigStore store, RemoteEventBus eventBus, PairedDeviceStore paired, ILogger<RendezvousClient> log)
+    public RendezvousClient(RendezvousConfigStore store, RemoteEventBus eventBus, PairedDeviceStore paired,
+        OwnerAccountStore owner, SupabaseAuthService supabase,
+        NINA.Headless.Services.H264Transcoder h264, NINA.Headless.Services.CameraStreamService stream,
+        ILogger<RendezvousClient> log)
     {
         _store = store;
         _eventBus = eventBus;
         _paired = paired;
+        _owner = owner;
+        _supabase = supabase;
+        _h264 = h264;
+        _stream = stream;
         _log = log;
         _loopback = new HttpClient
         {
@@ -198,9 +219,34 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
                 _peer = null;
             }
             _pendingIce.Clear();
+            _videoTrack = null;
         }
 
         var pc = new RTCPeerConnection(new RTCConfiguration { iceServers = _iceServers });
+
+        // Attach a VP8 send-only track if the controller's offer requested
+        // video. Mirror the LAN WebRTCService path so the rendezvous tunnel
+        // delivers the same viewfinder stream — same ffmpeg pipeline, same
+        // NALU events, same wall-clock RTP timestamps. Sniff the offer for
+        // an `m=video` line; if absent, the controller is on the data-only
+        // path and we skip the video setup entirely so the peer doesn't
+        // negotiate a video transceiver it can't render.
+        if (sdp.Contains("\nm=video", StringComparison.Ordinal) || sdp.StartsWith("m=video", StringComparison.Ordinal))
+        {
+            // CameraStreamService.StartAsync is idempotent and ensures the
+            // INDI BLOB → ffmpeg → IVF pipeline is producing frames before
+            // we hand the track to the peer. Without this, a remote viewer
+            // that arrives before any LAN viewer ever connected sees a
+            // black canvas because ffmpeg has no input.
+            try { await _stream.StartAsync(CancellationToken.None); }
+            catch (Exception ex) { _log.LogWarning(ex, "rendezvous: stream start failed; video track may be silent"); }
+
+            var videoFormat = new VideoFormat(VideoCodecsEnum.VP8, 96);
+            var track = new MediaStreamTrack(videoFormat, MediaStreamStatusEnum.SendOnly);
+            pc.addTrack(track);
+            _videoTrack = track;
+            AttachVideoHandlers();
+        }
 
         pc.onicecandidate += async (cand) =>
         {
@@ -237,7 +283,9 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
                 {
                     if (_peer == pc) _peer = null;
                     _activeChannel = null;
+                    _videoTrack = null;
                 }
+                DetachVideoHandlers();
             }
         };
 
@@ -259,10 +307,17 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
         var answer = pc.createAnswer(null);
         await pc.setLocalDescription(answer);
 
+        // Same fix-up as the LAN WebRTC path: SIPSorcery emits the m= line
+        // with `UDP/TLS/RTP/SAVP` even with rtcp-fb advertised, while
+        // browsers + iOS WebRTC expect `SAVPF` (RFC 5124). Without this the
+        // peer rejects the answer and the video transceiver never opens.
+        var answerSdp = pc.localDescription.sdp.ToString();
+        answerSdp = answerSdp.Replace(" UDP/TLS/RTP/SAVP ", " UDP/TLS/RTP/SAVPF ");
+
         await SendServerAsync(new
         {
             type = "answer",
-            payload = new { type = "answer", sdp = pc.localDescription.sdp.ToString() }
+            payload = new { type = "answer", sdp = answerSdp }
         });
 
         lock (_peerLock)
@@ -274,6 +329,60 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
             }
             _pendingIce.Clear();
         }
+    }
+
+    /// <summary>Subscribe to the shared H264Transcoder events. Idempotent —
+    /// re-attaching is a no-op so we can call this on every fresh offer.
+    /// The detach side is the symmetric cleanup; called when the peer dies
+    /// so encoder ticks don't leak into a closed RTCPeerConnection.</summary>
+    private void AttachVideoHandlers()
+    {
+        if (_videoHandlersAttached) return;
+        _h264.FrameBoundary += OnVideoFrameBoundary;
+        _h264.NaluReady += OnVideoNaluReady;
+        _videoHandlersAttached = true;
+    }
+
+    private void DetachVideoHandlers()
+    {
+        if (!_videoHandlersAttached) return;
+        _h264.FrameBoundary -= OnVideoFrameBoundary;
+        _h264.NaluReady -= OnVideoNaluReady;
+        _videoHandlersAttached = false;
+        _videoStreamStartTicks = 0;
+        _videoRtpTimestamp = 0;
+    }
+
+    /// <summary>Wall-clock RTP timestamp for the rendezvous peer's video
+    /// stream. Same algorithm as WebRTCService.OnFrameBoundary — 90 kHz,
+    /// computed from elapsed ticks since the first frame of this session.
+    /// Independent of the LAN path's counter so two simultaneous viewers
+    /// can each have their own monotonic clock.</summary>
+    private void OnVideoFrameBoundary()
+    {
+        var startTicks = Volatile.Read(ref _videoStreamStartTicks);
+        if (startTicks == 0)
+        {
+            startTicks = DateTime.UtcNow.Ticks;
+            Interlocked.CompareExchange(ref _videoStreamStartTicks, startTicks, 0);
+            startTicks = Volatile.Read(ref _videoStreamStartTicks);
+        }
+        var elapsedTicks = DateTime.UtcNow.Ticks - startTicks;
+        _videoRtpTimestamp = (uint)(elapsedTicks * 9 / 1000);
+    }
+
+    private void OnVideoNaluReady(byte[] nalu)
+    {
+        // Snapshot under lock so a concurrent peer-state-change can't null
+        // the track between the check and the send. SendVideo on a closed
+        // peer just throws; we swallow because the next FrameBoundary will
+        // re-attempt with the new state.
+        RTCPeerConnection? pc;
+        MediaStreamTrack? track;
+        lock (_peerLock) { pc = _peer; track = _videoTrack; }
+        if (pc == null || track == null) return;
+        try { pc.SendVideo(_videoRtpTimestamp, nalu); }
+        catch (Exception ex) { _log.LogDebug(ex, "rendezvous SendVideo failed"); }
     }
 
     private void HandleHello(JsonElement root)
@@ -290,16 +399,55 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
             _ = SendServerAsync(new { type = "error", error = "missing_token" });
             return;
         }
+        // Fire-and-forget the Supabase verify so we don't block the WS receive
+        // loop on a remote HTTP call. The result feeds back into _authenticatedDevice
+        // and the hello-ack the same way the legacy synchronous path did.
+        _ = HandleHelloAuthAsync(token, deviceId);
+    }
+
+    private async Task HandleHelloAuthAsync(string token, string? deviceId)
+    {
+        // Account-based auth path: if the token is a Supabase access token
+        // and the verified UUID is (or can become) the observatory's owner,
+        // accept. We synthesise a minimal PairedDevice so the rest of the
+        // signaling pipeline — which keys off _authenticatedDevice — keeps
+        // working without a wider refactor.
+        var uuid = await _supabase.VerifyAsync(token);
+        if (uuid != null)
+        {
+            var authorized = _owner.IsAuthorized(uuid) || _owner.TryClaim(uuid);
+            if (authorized)
+            {
+                _authenticatedDevice = new PairedDevice
+                {
+                    Id = deviceId ?? uuid,
+                    Nickname = "Supabase",
+                    PublicKey = "",
+                    TokenHash = "",
+                    PairedAt = DateTime.UtcNow,
+                };
+                _log.LogInformation("hello authenticated via Supabase user {Uuid} (device={DeviceId})", uuid, deviceId);
+                await SendServerAsync(new { type = "hello-ack", nickname = "Supabase" });
+                return;
+            }
+            _log.LogWarning("hello: Supabase user {Uuid} not authorized for this observatory", uuid);
+            await SendServerAsync(new { type = "error", error = "not_owner" });
+            return;
+        }
+
+        // Supabase verify said null — either offline or this is a legacy
+        // LAN-trust bearer token. Try that path so already-paired phones
+        // keep working.
         var device = _paired.Verify(token);
         if (device == null)
         {
             _log.LogWarning("hello with invalid token from {DeviceId}", deviceId);
-            _ = SendServerAsync(new { type = "error", error = "invalid_token" });
+            await SendServerAsync(new { type = "error", error = "invalid_token" });
             return;
         }
         _authenticatedDevice = device;
-        _log.LogInformation("hello authenticated: device={DeviceId} ({Nickname})", device.Id, device.Nickname);
-        _ = SendServerAsync(new { type = "hello-ack", nickname = device.Nickname });
+        _log.LogInformation("hello authenticated via legacy bearer: device={DeviceId} ({Nickname})", device.Id, device.Nickname);
+        await SendServerAsync(new { type = "hello-ack", nickname = device.Nickname });
     }
 
     private void HandleIce(JsonElement payload)

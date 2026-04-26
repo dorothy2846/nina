@@ -711,18 +711,19 @@ public class IndiDiscoveryService : BackgroundService
             }
         }
 
-        // On PIER_WEST the DEC axis is upside-down relative to PIER_EAST, so the AM5 driver's
-        // MOTION_NORTH physically moves the tube toward decreasing DEC. Flip here so callers
-        // get the celestial direction they asked for.
-        var pierWest = dev?.Properties.TryGetValue("TELESCOPE_PIER_SIDE", out var ps) == true
-                       && ps["PIER_WEST"]?.ValueOn == true;
-
+        // Pass the button direction straight through to the driver's motor switch.
+        // Earlier this applied a pier-side XOR so "North" always meant celestial +DEC —
+        // but the server only reads pier ONCE per press, and crossing the pole during
+        // the move silently flipped PIER_SIDE without the server re-evaluating. Result:
+        // successive N presses near the pole sent opposite motor commands, producing
+        // the "N goes one way, next N goes the other" bouncing the user reported.
+        // Mapping button→motor directly trades a one-time "N feels reversed on PIER_WEST"
+        // learning cost for consistent behavior during any single operation.
         var dir = direction.ToLowerInvariant();
         if (dir == "north" || dir == "south")
         {
-            bool wantNorth = (dir == "north") ^ pierWest;
             await client.SetSwitchManyAsync(deviceName, "TELESCOPE_MOTION_NS",
-                new[] { ("MOTION_NORTH", wantNorth), ("MOTION_SOUTH", !wantNorth) }, ct);
+                new[] { ("MOTION_NORTH", dir == "north"), ("MOTION_SOUTH", dir == "south") }, ct);
         }
         else if (dir == "east" || dir == "west")
         {
@@ -1275,6 +1276,45 @@ public class IndiDiscoveryService : BackgroundService
         UpdateKind(DeviceKind.Switch, devs.Where(d => d.IsSwitch));
         UpdateKind(DeviceKind.Weather, devs.Where(d => d.IsWeather));
         // Rotator/Dome/FlatPanel can be added when we expose IsRotator etc. flags
+
+        DetectConnectionEdges(devs);
+    }
+
+    // Tracks which devices we've already announced as connected. Lets DeviceConnected
+    // fire exactly once per connect, including the boot path where the driver was
+    // already CONNECT=On before we hooked DevicesChanged.
+    private readonly HashSet<string> _announcedConnected = new();
+
+    /// <summary>Fires when an INDI device transitions Disconnected → Connected (rising
+    /// edge). The kind is best-guess from the device's IsCamera/IsTelescope flags.
+    /// Subscribers run on the INDI client thread — keep handlers cheap or off-load.</summary>
+    public event Action<DeviceKind, string>? DeviceConnected;
+
+    private void DetectConnectionEdges(IReadOnlyList<IndiDevice> devs)
+    {
+        // Snapshot current set so we can drop entries for devices that disappeared
+        // — that way an unplug+replug fires DeviceConnected again.
+        var seen = new HashSet<string>();
+        foreach (var dev in devs)
+        {
+            seen.Add(dev.Name);
+            if (!dev.IsConnected) { _announcedConnected.Remove(dev.Name); continue; }
+            if (!_announcedConnected.Add(dev.Name)) continue; // already announced
+
+            DeviceKind? kind =
+                dev.IsCamera ? DeviceKind.Camera :
+                dev.IsTelescope ? DeviceKind.Telescope :
+                dev.IsFocuser ? DeviceKind.Focuser :
+                dev.IsFilterWheel ? DeviceKind.FilterWheel :
+                dev.IsSwitch ? DeviceKind.Switch :
+                dev.IsWeather ? DeviceKind.Weather : (DeviceKind?)null;
+            if (kind is DeviceKind k)
+            {
+                try { DeviceConnected?.Invoke(k, dev.Name); }
+                catch (Exception ex) { _log.LogWarning(ex, "DeviceConnected handler threw for {Device}", dev.Name); }
+            }
+        }
+        _announcedConnected.RemoveWhere(name => !seen.Contains(name));
     }
 
     private void UpdateKind(DeviceKind kind, IEnumerable<IndiDevice> matching)
@@ -1449,6 +1489,34 @@ public class IndiDiscoveryService : BackgroundService
                   $"<oneNumber name=\"VER_BIN\">{binY}</oneNumber>" +
                   $"</newNumberVector>";
         await client.SendAsync(xml, ct);
+    }
+
+    /// <summary>Set CCD_FRAME (X/Y/WIDTH/HEIGHT) for sub-frame read-out.
+    /// Planetary lucky-imaging only reads a small window around the target;
+    /// the smaller the frame, the higher the achievable fps.</summary>
+    public async Task SetSubFrameAsync(string deviceName, int x, int y, int width, int height, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return;
+        var xml = $"<newNumberVector device=\"{Escape(deviceName)}\" name=\"CCD_FRAME\">" +
+                  $"<oneNumber name=\"X\">{x}</oneNumber>" +
+                  $"<oneNumber name=\"Y\">{y}</oneNumber>" +
+                  $"<oneNumber name=\"WIDTH\">{width}</oneNumber>" +
+                  $"<oneNumber name=\"HEIGHT\">{height}</oneNumber>" +
+                  $"</newNumberVector>";
+        await client.SendAsync(xml, ct);
+    }
+
+    /// <summary>Read current sensor max resolution from CCD_INFO. Used to
+    /// translate normalized ROI fractions into pixel coordinates.</summary>
+    public (int width, int height)? GetSensorSize(string deviceName)
+    {
+        var client = _client; if (client == null) return null;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return null;
+        if (!dev.Properties.TryGetValue("CCD_INFO", out var info)) return null;
+        var w = (int)(info["CCD_MAX_X"]?.AsDouble ?? 0);
+        var h = (int)(info["CCD_MAX_Y"]?.AsDouble ?? 0);
+        return (w > 0 && h > 0) ? (w, h) : null;
     }
 
     public async Task SetCoolingAsync(string deviceName, bool enabled, double? targetTemperature, CancellationToken ct)
