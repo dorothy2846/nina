@@ -51,10 +51,7 @@ public class PlateSolvingController : ControllerBase
         var telescope = _state.TelescopeInfo;
         var camera = _state.CameraInfo;
 
-        // 1. ASTAP path handling (Assume installed in /usr/bin/astap or /opt/astap on Linux)
-        var astapPath = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) 
-            ? "/usr/bin/xvfb-run -a astap" 
-            : "/Applications/ASTAP.app/Contents/MacOS/astap"; // Mac fallback for local testing
+        var astapPath = PlatformPaths.AstapPath;
 
         var solver = new HeadlessAstapSolver(astapPath);
 
@@ -130,9 +127,7 @@ public class PlateSolvingController : ControllerBase
 
         var focalLength = 400.0; // Retrieve from Profile in production
         var pixelSize = cameraInfo.PixelSize;
-        var astapPath = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) 
-            ? "/usr/bin/xvfb-run -a astap" : "/Applications/ASTAP.app/Contents/MacOS/astap";
-        var solver = new HeadlessAstapSolver(astapPath);
+        var solver = new HeadlessAstapSolver(PlatformPaths.AstapPath);
 
         // Convert target to radians for distance math later
         var targetRaRad = request.TargetRa * Math.PI / 180.0;
@@ -158,8 +153,9 @@ public class PlateSolvingController : ControllerBase
             catch (Exception ex) { return StatusCode(500, new { success = false, message = $"Capture failed: {ex.Message}" }); }
             finally { _state.MarkExposureFinished(); }
 
-            var tempDir = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux) 
-                && Directory.Exists("/dev/shm") ? "/dev/shm" : Path.GetTempPath();
+            // /dev/shm is a RAM-backed tmpfs on Linux — much faster for repeated IO.
+            var tempDir = PlatformPaths.IsLinux && Directory.Exists("/dev/shm")
+                ? "/dev/shm" : Path.GetTempPath();
             var tempImage = Path.Combine(tempDir, $"center_{Guid.NewGuid()}.jpg");
             var imgData = _state.LatestImageData; 
             if (imgData == null || imgData.Length < 100)

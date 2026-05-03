@@ -1165,7 +1165,10 @@ public class IndiDiscoveryService : BackgroundService
             await client.SetNumberAsync(deviceName, "CCD_EXPOSURE", "CCD_EXPOSURE_VALUE", exposureSeconds, ct);
 
             // Wait for BLOB arrival. Budget = exposure + generous download margin.
-            var timeout = TimeSpan.FromSeconds(Math.Max(10, exposureSeconds + 30));
+            // Bumped from +30s to +90s because PlayerOne / large-sensor CMOS readout
+            // (uncompressed 12MP+ FITS over USB) can comfortably take 30-60s on its
+            // own; the previous margin tripped 504s on otherwise healthy 30s captures.
+            var timeout = TimeSpan.FromSeconds(Math.Max(15, exposureSeconds + 90));
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
             using var reg = cts.Token.Register(() => tcs.TrySetCanceled(cts.Token));

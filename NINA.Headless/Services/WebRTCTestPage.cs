@@ -38,7 +38,7 @@ internal static class WebRTCTestPage
   <div style="margin-top:8px;padding:8px;background:#1a1a1a;border:1px solid #333;border-radius:4px;">
     <strong>Video record (SER, runs alongside stream)</strong><br>
     <label>Filename: <input id="recName" type="text" value="session" style="width:140px"></label>
-    <label>Duration (s, blank=until stop): <input id="recDur" type="number" style="width:80px" placeholder="manual"></label>
+    <label>Duration (s, max 60): <input id="recDur" type="number" min="1" max="60" value="60" style="width:80px"></label>
     <button id="recStart">Start Record</button>
     <button id="recStop">Stop Record</button>
     <span id="recStatus" style="margin-left:8px;color:#aaa">idle</span>

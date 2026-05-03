@@ -7,17 +7,24 @@
 
 ## 🥧 NINA-Pi: Headless Raspberry Pi Port
 
-This fork (`nina-pi` branch) contains a headless port of N.I.N.A. for Raspberry Pi and other ARM64 Linux systems.
+This fork (`nina-pi` branch) contains a headless port of N.I.N.A. that runs
+cross-platform on **Linux, macOS, and Windows**.
 
 **Key Features:**
-- Headless operation (no GUI) optimized for remote observatory control
+- Headless operation (no GUI) for remote observatory control and local dev
 - REST API on port 1888 (Touch'N'Stars compatible)
-- Equipment bridge via INDI → indi_alpaca_server → Alpaca protocol
+- Equipment bridge via INDI → indi_alpaca_server → Alpaca protocol (Linux)
+- Native ASCOM/Alpaca on Windows, ASCOM Alpaca on macOS
 - PHD2 auto-spawning as subprocess for guiding
-- mDNS discovery (nina-pi.local) via avahi-daemon
-- WiFi hotspot mode (SSID: NINA-Pi) for field deployment
+- mDNS discovery via avahi-daemon (Linux) / Bonjour (macOS)
+- WiFi hotspot mode (Linux only, for field deployment)
 
-**Target Platform:** Ubuntu Server 24.04 ARM64 (.NET 9.0)
+**Supported Platforms:**
+- Linux: Ubuntu 22.04+ / Debian 12+ (x64, ARM64) — full feature set
+- macOS: 13+ (Intel, Apple Silicon) — dev/test + native camera SDKs
+- Windows: 10/11 (x64) — dev/test + ASCOM drivers
+
+**Build Requirements:** .NET 10.0 SDK
 
 ---
 

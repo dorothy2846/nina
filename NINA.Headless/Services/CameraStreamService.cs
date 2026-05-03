@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using NINA.Headless.Indi;
+using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Advanced;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.PixelFormats;
 
 namespace NINA.Headless.Services;
 
@@ -62,7 +66,6 @@ public class CameraStreamService : IAsyncDisposable
     private (int x, int y, int w, int h)? _savedSubFrame;
     private CancellationTokenSource? _keepaliveCts;
     private double _maxFps = 10;
-    private int _streamGain = 300;
 
     // FPS tracking — rolling 1-second window of frame arrival times.
     private readonly Queue<DateTime> _frameTimes = new();
@@ -357,6 +360,10 @@ public class CameraStreamService : IAsyncDisposable
             _streamingDevice = device;
         }
 
+        // Force debayer-vs-passthrough decision on the very first frame
+        // (instead of waiting `BinningRecheckEvery` frames at default false).
+        _framesSinceBinningCheck = BinningRecheckEvery;
+
         // Keepalive loop — pushes the last cached frame to the encoder
         // whenever the camera goes quiet for >500ms. Long still-captures
         // pause BLOB delivery; without this the WebRTC viewer would see a
@@ -467,6 +474,22 @@ public class CameraStreamService : IAsyncDisposable
 
     private byte[]? _lastJpeg;
 
+    /// Bayer pattern for the connected colour camera. Driver-side debayer
+    /// isn't available on PlayerOne (CCD_VIDEO_FORMAT only exposes RAW8/16),
+    /// so we receive a grayscale-encoded mosaic JPEG and debayer in process
+    /// before fan-out. Empty string = mono camera, frame passes through.
+    /// TODO: read from INDI CCD_CFA on stream start; hardcoded for now since
+    /// PlayerOne / ZWO OSC sensors all report RGGB.
+    private string _bayerPattern = "RGGB";
+
+    /// Cached at stream start (and re-checked every ~30 frames as a safety
+    /// net) so we don't pay for `TryBuildCameraInfo`'s ~15 dictionary lookups
+    /// on every BLOB. Hardware binning destroys Bayer alignment, so we skip
+    /// debayer when this is true.
+    private bool _hardwareBinned;
+    private int _framesSinceBinningCheck;
+    private const int BinningRecheckEvery = 30;
+
     private void OnBlobReceived(string device, string property, string element, byte[] bytes, string? format)
     {
         if (!_running || property != "CCD1") return;
@@ -479,16 +502,81 @@ public class CameraStreamService : IAsyncDisposable
             while (_frameTimes.Count > 0 && (now - _frameTimes.Peek()).TotalSeconds > 1.0) _frameTimes.Dequeue();
         }
 
-        // Cache the latest frame so the keepalive loop can re-push it if the
-        // camera goes quiet (long still-capture is the normal case where
-        // BLOBs pause). Stream pipeline never starves; user sees the last
-        // live frame instead of a frozen black canvas.
-        _lastJpeg = bytes;
+        // Re-poll binning every BinningRecheckEvery frames so a runtime change
+        // (rare) is picked up without the per-frame cost of always polling.
+        if (++_framesSinceBinningCheck >= BinningRecheckEvery)
+        {
+            var info = _indi.TryBuildCameraInfo(device);
+            _hardwareBinned = info != null && (info.BinX > 1 || info.BinY > 1);
+            _framesSinceBinningCheck = 0;
+        }
 
-        _ = BroadcastJpegAsync(bytes);
+        var fanout = (!string.IsNullOrEmpty(_bayerPattern) && !_hardwareBinned)
+            ? TryDebayer(bytes, _bayerPattern) ?? bytes
+            : bytes;
+
+        _lastJpeg = fanout;
+
+        _ = BroadcastJpegAsync(fanout);
         if (_h264.IsRunning)
         {
-            _ = _h264.PushJpegAsync(bytes, CancellationToken.None);
+            _ = _h264.PushJpegAsync(fanout, CancellationToken.None);
+        }
+    }
+
+    /// 2×2 binning debayer of a grayscale JPEG that contains a Bayer mosaic.
+    /// Output is half-res RGB JPEG. Returns null on decode failure (caller
+    /// falls back to the original grayscale frame).
+    private static byte[]? TryDebayer(byte[] mosaicJpeg, string pattern)
+    {
+        try
+        {
+            using var img = SixLabors.ImageSharp.Image.Load<L8>(mosaicJpeg);
+            int w = img.Width;
+            int h = img.Height;
+            int outW = w / 2;
+            int outH = h / 2;
+            if (outW < 2 || outH < 2) return null;
+
+            using var rgb = new SixLabors.ImageSharp.Image<Rgb24>(outW, outH);
+            for (int y = 0; y < outH; y++)
+            {
+                var src0 = img.DangerousGetPixelRowMemory(y * 2).Span;
+                var src1 = img.DangerousGetPixelRowMemory(y * 2 + 1).Span;
+                var dst = rgb.DangerousGetPixelRowMemory(y).Span;
+                for (int x = 0; x < outW; x++)
+                {
+                    int sx = x * 2;
+                    byte tl = src0[sx].PackedValue;
+                    byte tr = src0[sx + 1].PackedValue;
+                    byte bl = src1[sx].PackedValue;
+                    byte br = src1[sx + 1].PackedValue;
+
+                    byte r, g, b;
+                    switch (pattern)
+                    {
+                        case "RGGB":
+                            r = tl; g = (byte)((tr + bl) >> 1); b = br; break;
+                        case "BGGR":
+                            b = tl; g = (byte)((tr + bl) >> 1); r = br; break;
+                        case "GRBG":
+                            g = (byte)((tl + br) >> 1); r = tr; b = bl; break;
+                        case "GBRG":
+                            g = (byte)((tl + br) >> 1); b = tr; r = bl; break;
+                        default:
+                            r = g = b = (byte)((tl + tr + bl + br) >> 2); break;
+                    }
+                    dst[x] = new Rgb24(r, g, b);
+                }
+            }
+
+            using var ms = new MemoryStream();
+            rgb.SaveAsJpeg(ms, new JpegEncoder { Quality = 85 });
+            return ms.ToArray();
+        }
+        catch
+        {
+            return null;
         }
     }
 

@@ -236,9 +236,14 @@ public class CameraController : ControllerBase
             // doesn't expose CCD_CONTROLS / CCD_GAIN / CCD_OFFSET.
             try { await _indi.SetGainAsync(selected.UniqueId, request.Gain, HttpContext.RequestAborted); } catch { }
             try { await _indi.SetOffsetAsync(selected.UniqueId, request.Offset, HttpContext.RequestAborted); } catch { }
+            // Hardware binning destroys Bayer alignment on colour sensors —
+            // the camera sums R+G+G+B per output pixel and the mosaic is gone.
+            // Force the camera to 1×1 and apply the user's requested binning
+            // as a server-side average AFTER debayering. Costs a slightly
+            // slower sensor readout but preserves colour at any binning.
             if (request.Binning >= 1)
             {
-                try { await _indi.SetBinningAsync(selected.UniqueId, request.Binning, request.Binning, HttpContext.RequestAborted); } catch { }
+                try { await _indi.SetBinningAsync(selected.UniqueId, 1, 1, HttpContext.RequestAborted); } catch { }
             }
             // Set CCD_FRAME_TYPE so the driver tags the FITS (and for dark/bias skips shutter
             // mechanics). Defaults to Light when the client doesn't specify.
@@ -249,7 +254,7 @@ public class CameraController : ControllerBase
             var (fitsBytes, _) = await _indi.CameraExposeAsync(selected.UniqueId, request.ExposureTime, HttpContext.RequestAborted);
 
             byte[] pngBytes;
-            try { pngBytes = FitsToPng.Convert(fitsBytes); }
+            try { pngBytes = FitsToPng.Convert(fitsBytes, Math.Max(1, request.Binning)); }
             catch (Exception ex)
             {
                 return StatusCode(500, new { success = false, message = $"Image decode failed: {ex.Message}" });

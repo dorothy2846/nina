@@ -16,8 +16,16 @@ public class SimulatorService : BackgroundService
     private readonly CameraMediator _cameraMediator;
     private readonly TelescopeMediator _telescopeMediator;
     private readonly GuiderMediator _guiderMediator;
+    private readonly CameraSelectionService _cameraSelection;
+    private readonly IndiDiscoveryService _indi;
 
     private readonly CameraInfo _cameraInfo;
+    private readonly CameraInfo _disconnectedCameraInfo = new()
+    {
+        Connected = false,
+        Name = "Not connected",
+        CameraState = CameraStates.NoState
+    };
     private readonly TelescopeInfo _telescopeInfo;
     private readonly GuiderInfo _guiderInfo;
     private readonly FilterWheelInfo _filterWheelInfo;
@@ -34,16 +42,20 @@ public class SimulatorService : BackgroundService
     public SimulatorService(
         CameraMediator cameraMediator,
         TelescopeMediator telescopeMediator,
-        GuiderMediator guiderMediator)
+        GuiderMediator guiderMediator,
+        CameraSelectionService cameraSelection,
+        IndiDiscoveryService indi)
     {
         _cameraMediator = cameraMediator;
         _telescopeMediator = telescopeMediator;
         _guiderMediator = guiderMediator;
+        _cameraSelection = cameraSelection;
+        _indi = indi;
 
         _cameraInfo = new CameraInfo
         {
             Connected = true,
-            Name = "Simulator Camera",
+            Name = "NINA Simulator Camera",
             Temperature = -10.0,
             CoolerPower = 65.0,
             CoolerOn = true,
@@ -150,9 +162,25 @@ public class SimulatorService : BackgroundService
 
     private void BroadcastAll()
     {
-        _cameraMediator.Broadcast(_cameraInfo);
-        _telescopeMediator.Broadcast(_telescopeInfo);
-        _guiderMediator.Broadcast(_guiderInfo);
+        // Camera path goes through CameraSelectionService — disconnected unless explicitly selected/connected.
+        _cameraMediator.Broadcast(BuildActiveCameraInfo());
+        // Telescope and guider used to broadcast simulated data unconditionally, which made every
+        // device look connected on /equipment/status. Now they're driven by real INDI devices through
+        // EquipmentSelectionService and EquipmentController.GetStatus, so don't push fake info anymore.
+    }
+
+    private CameraInfo BuildActiveCameraInfo()
+    {
+        var selected = _cameraSelection.GetSelected();
+        if (selected == null || !_cameraSelection.IsConnected)
+            return _disconnectedCameraInfo;
+
+        return selected.Provider switch
+        {
+            CameraProvider.Simulator => _cameraInfo,
+            CameraProvider.Indi => _indi.TryBuildCameraInfo(selected.UniqueId) ?? _disconnectedCameraInfo,
+            _ => _disconnectedCameraInfo
+        };
     }
 
     private void UpdateCamera()
