@@ -225,6 +225,9 @@ public class CameraStreamService : IAsyncDisposable
         var client = _indi.Client;
         if (client == null) return;
 
+        _log.LogInformation("ConfigureApply: exposureChanged={Ec} gainChanged={Gc} sensorTouched={St} exp={E}s gain={G}",
+            exposureChanged, gainChanged, sensorTouched, _exposureSeconds, _streamGainOverride);
+
         // Live exposure update — resolve the driver's exact property name
         // once at stream start (see ResolveLiveExposureProperty), then push
         // the user's value into it. No fallback chain on the hot path.
@@ -234,6 +237,7 @@ public class CameraStreamService : IAsyncDisposable
             try
             {
                 await client.SetNumberAsync(device, propName, elName, _exposureSeconds * scaleToDriverUnits, ct);
+                _log.LogInformation("ConfigureApply: pushed {Prop}.{El}={Val}", propName, elName, _exposureSeconds * scaleToDriverUnits);
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: live exposure set failed on {Prop}.{El}", propName, elName); }
         }
@@ -241,7 +245,12 @@ public class CameraStreamService : IAsyncDisposable
         // on PlayerOne/ZWO. Same no-blip property as exposure.
         if (gainChanged && _streamGainOverride is int g)
         {
-            try { await _indi.SetGainAsync(device, g, ct); } catch { }
+            try
+            {
+                await _indi.SetGainAsync(device, g, ct);
+                _log.LogInformation("ConfigureApply: pushed gain={G}", g);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "CameraStream: gain set failed"); }
         }
 
         // Exposure-only changes also need the stream OFF/ON dance on
@@ -445,50 +454,14 @@ public class CameraStreamService : IAsyncDisposable
             _log.LogWarning("CameraStream: no live-exposure property found on device {Dev}", device);
         }
 
-        // Enable INDI fast-toggle BEFORE starting the stream. PlayerOne (and
-        // some other CCD drivers) expose a CCD_FAST_TOGGLE switch — when ON
-        // the driver bypasses the per-exposure capture state machine and
-        // streams directly from the sensor, dropping its internal buffering
-        // dramatically. With this disabled the camera may queue ~5-10 frames
-        // internally even on idle USB; on a 8 fps preview that's > 600 ms of
-        // hidden latency the user can't measure from any rtc-stat. Cheap
-        // best-effort — drivers without the property silently no-op.
-        try
-        {
-            var dev = client.GetDevice(device);
-            if (dev != null && dev.Properties.ContainsKey("CCD_FAST_TOGGLE"))
-            {
-                await client.SetSwitchManyAsync(device, "CCD_FAST_TOGGLE",
-                    new[] { ("INDI_ENABLED", true), ("INDI_DISABLED", false) }, ct);
-                _log.LogInformation("CameraStream: enabled CCD_FAST_TOGGLE on {Dev}", device);
-            }
-
-            // Switch the sensor's video format to 8-bit when available.
-            // PlayerOne / ZWO / QHY default to RAW16 — twice the sensor
-            // readout time and twice the on-USB bandwidth as RAW8 for the
-            // same scene. The streaming MJPEG encoder on the camera side
-            // truncates to 8-bit anyway before compression, so RAW16 buys
-            // us nothing on the live preview path. Pick the first 8-bit
-            // element we find; the lookup is brand-agnostic so PlayerOne's
-            // POA_RAW8, ZWO's ASI_IMG_RAW8, etc. all match.
-            if (dev != null && dev.Properties.TryGetValue("CCD_VIDEO_FORMAT", out var vf))
-            {
-                string? raw8Element = vf.Elements.Values
-                    .Select(e => e.Name)
-                    .FirstOrDefault(n =>
-                        n.IndexOf("RAW8", StringComparison.OrdinalIgnoreCase) >= 0
-                        && n.IndexOf("RAW16", StringComparison.OrdinalIgnoreCase) < 0);
-                if (raw8Element != null && vf[raw8Element]?.ValueOn != true)
-                {
-                    var tuples = vf.Elements.Values
-                        .Select(e => (e.Name, e.Name == raw8Element))
-                        .ToArray();
-                    await client.SetSwitchManyAsync(device, "CCD_VIDEO_FORMAT", tuples, ct);
-                    _log.LogInformation("CameraStream: video format → {Fmt} on {Dev} (faster sensor readout vs RAW16)", raw8Element, device);
-                }
-            }
-        }
-        catch (Exception ex) { _log.LogDebug(ex, "CameraStream: pre-stream tuning set failed"); }
+        // CCD_FAST_TOGGLE was tried here previously: PlayerOne flags it as
+        // an "Experimental Feature" in its INDI driver and crashes the
+        // driver process under sustained streaming. We saw the device drop
+        // off the bus entirely with `Device 'PlayerOne CCD Uranus-C PRO'
+        // not published by any driver`. Stability beats the ~50 ms latency
+        // win — leave the property alone.
+        // CCD_VIDEO_FORMAT → RAW8: also tried, PlayerOne rejects with
+        // state=Alert mid- and pre-stream regardless of cycle order.
 
         await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
             new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
