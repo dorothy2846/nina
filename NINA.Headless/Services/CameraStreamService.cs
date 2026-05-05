@@ -200,22 +200,56 @@ public class CameraStreamService : IAsyncDisposable
     /// care that the camera is paused for 200 ms — keepalive loop holds the
     /// last frame on the WebRTC peer, then the new sub-framed BLOBs land
     /// straight into the existing encoder. Sub-second ROI swap.</summary>
-    public async Task ConfigureAndApplyAsync(double exposureSeconds, double maxFps, int? binX, int? binY, int? gain,
-                                              double? roiFracW, double? roiFracH, double? roiFracCX, double? roiFracCY,
-                                              CancellationToken ct)
+    private CancellationTokenSource? _applyDebounceCts;
+    private readonly object _applyLock = new();
+    private const int ApplyDebounceMs = 350;
+
+    public Task ConfigureAndApplyAsync(double exposureSeconds, double maxFps, int? binX, int? binY, int? gain,
+                                       double? roiFracW, double? roiFracH, double? roiFracCX, double? roiFracCY,
+                                       CancellationToken ct)
     {
-        var prevW = _roiFracW; var prevH = _roiFracH;
-        var prevCX = _roiFracCX; var prevCY = _roiFracCY;
-        var prevBX = _streamBinX; var prevBY = _streamBinY;
-        var prevExp = _exposureSeconds;
-        var prevGain = _streamGainOverride;
+        // Always store the user's intent immediately — the actual driver
+        // writes happen on a delayed/coalesced worker. PlayerOne (and likely
+        // others) get unhappy with multiple SetNumber writes in quick
+        // succession and disconnect the camera entirely; even iOS's
+        // 250 ms client-side debounce isn't always enough. Server-side
+        // coalesce: every call cancels the prior pending apply and arms a
+        // fresh one — only the LATEST values reach the driver, after the
+        // user stops adjusting for ApplyDebounceMs.
         Configure(exposureSeconds, maxFps, binX, binY, gain, roiFracW, roiFracH, roiFracCX, roiFracCY);
 
-        bool sensorTouched = prevW != _roiFracW || prevH != _roiFracH
-            || prevCX != _roiFracCX || prevCY != _roiFracCY
-            || prevBX != _streamBinX || prevBY != _streamBinY;
-        bool exposureChanged = Math.Abs(prevExp - _exposureSeconds) > 0.0001;
-        bool gainChanged = prevGain != _streamGainOverride;
+        CancellationTokenSource newCts;
+        lock (_applyLock)
+        {
+            _applyDebounceCts?.Cancel();
+            _applyDebounceCts?.Dispose();
+            _applyDebounceCts = newCts = new CancellationTokenSource();
+        }
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(ApplyDebounceMs, newCts.Token); }
+            catch (OperationCanceledException) { return; }
+            try { await ApplyToDriverAsync(newCts.Token); }
+            catch (Exception ex) { _log.LogWarning(ex, "CameraStream: deferred apply failed"); }
+        });
+        return Task.CompletedTask;
+    }
+
+    /// Snapshot of the configuration at the moment ApplyToDriverAsync runs.
+    /// Compared against the live `_*` fields to decide what changed since
+    /// the last applied state — `prev*` here = "last successfully applied".
+    private double _lastAppliedExp;
+    private int? _lastAppliedGain;
+    private double _lastAppliedRoiW = 1, _lastAppliedRoiH = 1, _lastAppliedRoiCX = 0.5, _lastAppliedRoiCY = 0.5;
+    private int? _lastAppliedBinX, _lastAppliedBinY;
+
+    private async Task ApplyToDriverAsync(CancellationToken ct)
+    {
+        bool sensorTouched = _lastAppliedRoiW != _roiFracW || _lastAppliedRoiH != _roiFracH
+            || _lastAppliedRoiCX != _roiFracCX || _lastAppliedRoiCY != _roiFracCY
+            || _lastAppliedBinX != _streamBinX || _lastAppliedBinY != _streamBinY;
+        bool exposureChanged = Math.Abs(_lastAppliedExp - _exposureSeconds) > 0.0001;
+        bool gainChanged = _lastAppliedGain != _streamGainOverride;
 
         bool isRunning;
         string? device;
@@ -227,6 +261,16 @@ public class CameraStreamService : IAsyncDisposable
 
         _log.LogInformation("ConfigureApply: exposureChanged={Ec} gainChanged={Gc} sensorTouched={St} exp={E}s gain={G}",
             exposureChanged, gainChanged, sensorTouched, _exposureSeconds, _streamGainOverride);
+
+        // Update applied snapshots up-front so a follow-up tick won't
+        // re-issue the same writes if the apply succeeds. (If anything
+        // throws below, the in-memory snapshot is slightly ahead of
+        // reality — still safer than re-pushing rapid duplicate writes.)
+        _lastAppliedExp = _exposureSeconds;
+        _lastAppliedGain = _streamGainOverride;
+        _lastAppliedRoiW = _roiFracW; _lastAppliedRoiH = _roiFracH;
+        _lastAppliedRoiCX = _roiFracCX; _lastAppliedRoiCY = _roiFracCY;
+        _lastAppliedBinX = _streamBinX; _lastAppliedBinY = _streamBinY;
 
         // Live exposure update — resolve the driver's exact property name
         // once at stream start (see ResolveLiveExposureProperty), then push
