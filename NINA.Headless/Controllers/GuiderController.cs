@@ -158,11 +158,16 @@ public class GuiderController : ControllerBase
     {
         if (!await _phd2.EnsureStartedAsync(HttpContext.RequestAborted))
             return StatusCode(503, new { success = false, message = "PHD2 unavailable" });
-        // PHD2's "guide" RPC with recalibrate=true performs a fresh calibration before guiding.
         await _phd2.SetAllConnectedAsync(true, HttpContext.RequestAborted);
-        // Re-send with recalibrate flag — we cheat and inline the RPC here so we don't expand the service surface.
-        await _phd2.StartGuidingAsync(HttpContext.RequestAborted); // Phd2Service doesn't expose recalibrate yet; TODO
-        return Ok(new { success = true, message = "Calibration+guiding started" });
+        // Force a fresh calibration. ClearCalibration drops PHD2's stored
+        // calibration matrix; StartCalibration kicks off the calibration
+        // sequence (move N px each direction, fit RA/Dec axes, identify
+        // backlash). User then sees Guiding state once PHD2 transitions.
+        await _phd2.ClearCalibrationAsync(HttpContext.RequestAborted);
+        var ok = await _phd2.StartCalibrationAsync(HttpContext.RequestAborted);
+        if (!ok)
+            return StatusCode(500, new { success = false, message = "PHD2 refused calibration start (no star locked? camera off?)" });
+        return Ok(new { success = true, message = "Calibration started" });
     }
 
     // ----- Full PHD2 control surface for the iOS client -----

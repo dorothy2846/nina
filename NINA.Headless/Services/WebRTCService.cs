@@ -29,6 +29,25 @@ public class WebRTCService
     private uint _rtpTimestamp;
     private bool _naluHandlerAttached;
 
+    // Paced sender — see StartPacer() / OnNaluReady() / PaceTick().
+    // The encoder emits NALs at variable rate (~131-139 ms inter-frame on
+    // libvpx software). Sending each NAL the moment it arrives leaks that
+    // 8 ms variance into the iOS receiver's inter-arrival timing, where
+    // its adaptive jitter buffer interprets the variance as network jitter
+    // and grows `jitterBufferTargetDelay` toward 4-5 s. Pacing send-side
+    // to a fixed 125 ms tick (8 fps) eliminates the perceived jitter at
+    // its source — receiver target stays low, end-to-end latency stays
+    // bounded by encoder time + 1 tick instead of growing without bound.
+    private readonly object _paceLock = new();
+    private byte[]? _pendingNalu;
+    private System.Threading.Timer? _paceTimer;
+    /// <summary>Server-side send pace. 200 ms = 5 fps. Empirically the
+    /// iOS Simulator's software VP8 decoder caps at ~5-6 fps (visible as
+    /// `framesPerSecond` in WebRTC stats); sending faster than that leaks
+    /// undecoded frames into the receiver's pre-render queue and the
+    /// reported "jitter buffer wait" climbs without bound.</summary>
+    private const int PaceIntervalMs = 200;
+
     public WebRTCService(H264Transcoder h264, CameraStreamService stream, ILogger<WebRTCService> log)
     {
         _h264 = h264;
@@ -43,6 +62,7 @@ public class WebRTCService
         if (_naluHandlerAttached) return;
         _h264.NaluReady += OnNaluReady;
         _h264.FrameBoundary += OnFrameBoundary;
+        _paceTimer = new System.Threading.Timer(_ => PaceTick(), null, PaceIntervalMs, PaceIntervalMs);
         _naluHandlerAttached = true;
     }
 
@@ -74,13 +94,53 @@ public class WebRTCService
         MaybeLog();
     }
 
+    /// Latest-NAL-wins on the SEND side. Encoder produces faster than the
+    /// pace tick → older NAL gets replaced before it can be sent (server-
+    /// side equivalent of FreshOnlyRenderer on the client). Encoder slower
+    /// → tick fires with no NAL pending and we just don't send. Receiver
+    /// gets exactly one frame per `PaceIntervalMs`, perfectly uniform.
     private void OnNaluReady(byte[] nalu)
     {
         if (_peers.IsEmpty) return;
         Interlocked.Increment(ref _naluCount);
+        lock (_paceLock)
+        {
+            _pendingNalu = nalu;
+        }
+    }
+
+    private void PaceTick()
+    {
+        if (_peers.IsEmpty) return;
+        byte[]? nalu;
+        lock (_paceLock)
+        {
+            nalu = _pendingNalu;
+            _pendingNalu = null;
+        }
+        if (nalu == null) return;
+
+        // Compute the RTP timestamp at SEND time, not at encoder-emit time.
+        // The receiver uses (RTP TS delta) - (arrival delta) to infer
+        // network jitter. Both deltas should match for zero perceived
+        // jitter — and the easiest way to guarantee that is to make RTP TS
+        // track our own fixed-rate send tick (so deltas are exactly the
+        // tick period, every time, regardless of when the encoder finished
+        // any particular frame).
+        var startTicks = Volatile.Read(ref _streamStartTicks);
+        if (startTicks == 0)
+        {
+            startTicks = DateTime.UtcNow.Ticks;
+            Interlocked.CompareExchange(ref _streamStartTicks, startTicks, 0);
+            startTicks = Volatile.Read(ref _streamStartTicks);
+        }
+        var elapsedTicks = DateTime.UtcNow.Ticks - startTicks;
+        var ts = (uint)(elapsedTicks * 9 / 1000); // 90 kHz
+        _rtpTimestamp = ts;
+
         foreach (var kv in _peers)
         {
-            try { kv.Value.Peer.SendVideo(_rtpTimestamp, nalu); Interlocked.Increment(ref _sendOk); }
+            try { kv.Value.Peer.SendVideo(ts, nalu); Interlocked.Increment(ref _sendOk); }
             catch (Exception ex) { _log.LogWarning(ex, "WebRTC: SendVideo failed for peer {Id}", kv.Key); Interlocked.Increment(ref _sendFail); }
         }
         MaybeLog();

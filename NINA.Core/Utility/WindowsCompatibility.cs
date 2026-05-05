@@ -174,6 +174,12 @@ namespace System.Windows.Media {
 }
 
 namespace System.Windows.Media.Imaging {
+    /// <summary>Cross-platform stand-in for WPF's BitmapSource. Holds the
+    /// pixel buffer in a managed byte array — that's the part the original
+    /// stub omitted, and why every NINA.Image stretch / debayer through this
+    /// path silently lost its pixels on Linux/macOS. The Windows build keeps
+    /// using the real WPF type via #if WINDOWS, so this only kicks in on
+    /// non-Windows targets.</summary>
     public class BitmapSource {
         public int PixelWidth { get; set; }
         public int PixelHeight { get; set; }
@@ -182,35 +188,130 @@ namespace System.Windows.Media.Imaging {
         public PixelFormat Format { get; set; }
         public int DpiX { get; set; } = 96;
         public int DpiY { get; set; } = 96;
+
+        // Backing pixel buffer + stride. Allocated by Create / WritePixels;
+        // CopyPixels reads from here. Stride may differ from PixelWidth*bpp/8
+        // for word-aligned formats — preserve the original.
+        protected internal byte[]? _pixels;
+        protected internal int _stride;
+
         public void Freeze() { }
-        public void CopyPixels(byte[] buffer, int stride, int offset) { }
-        public void CopyPixels(ushort[] buffer, int stride, int offset) { }
-        public void CopyPixels(Array buffer, int stride, int offset) { }
-        public void CopyPixels(Int32Rect sourceRect, Array buffer, int stride, int offset) { }
-        public void CopyPixels(Int32Rect sourceRect, IntPtr buffer, int bufferSize, int stride) { }
+
+        public void CopyPixels(byte[] buffer, int stride, int offset) {
+            if (_pixels == null) return;
+            int len = Math.Min(_pixels.Length, buffer.Length - offset);
+            Buffer.BlockCopy(_pixels, 0, buffer, offset, len);
+        }
+        public void CopyPixels(ushort[] buffer, int stride, int offset) {
+            if (_pixels == null) return;
+            int byteLen = Math.Min(_pixels.Length, (buffer.Length - offset) * 2);
+            Buffer.BlockCopy(_pixels, 0, buffer, offset * 2, byteLen);
+        }
+        public void CopyPixels(Array buffer, int stride, int offset) {
+            if (_pixels == null) return;
+            int elementSize = Buffer.ByteLength(buffer) / Math.Max(1, buffer.Length);
+            int byteLen = Math.Min(_pixels.Length, Buffer.ByteLength(buffer) - offset * elementSize);
+            Buffer.BlockCopy(_pixels, 0, buffer, offset * elementSize, byteLen);
+        }
+        public void CopyPixels(Int32Rect sourceRect, Array buffer, int stride, int offset) {
+            if (_pixels == null) return;
+            int bpp = Math.Max(1, Format.BitsPerPixel / 8);
+            int srcStride = _stride > 0 ? _stride : PixelWidth * bpp;
+            int rectW = sourceRect.Width <= 0 ? PixelWidth : sourceRect.Width;
+            int rectH = sourceRect.Height <= 0 ? PixelHeight : sourceRect.Height;
+            int rowBytes = rectW * bpp;
+            int destBytesPerEntry = Buffer.ByteLength(buffer) / Math.Max(1, buffer.Length);
+            for (int row = 0; row < rectH; row++) {
+                int srcOff = (sourceRect.Y + row) * srcStride + sourceRect.X * bpp;
+                int dstByteOff = offset * destBytesPerEntry + row * stride;
+                int n = Math.Min(rowBytes, _pixels.Length - srcOff);
+                if (n <= 0) break;
+                Buffer.BlockCopy(_pixels, srcOff, buffer, dstByteOff, n);
+            }
+        }
+        public void CopyPixels(Int32Rect sourceRect, IntPtr buffer, int bufferSize, int stride) {
+            if (_pixels == null || buffer == IntPtr.Zero) return;
+            int bpp = Math.Max(1, Format.BitsPerPixel / 8);
+            int srcStride = _stride > 0 ? _stride : PixelWidth * bpp;
+            int rectW = sourceRect.Width <= 0 ? PixelWidth : sourceRect.Width;
+            int rectH = sourceRect.Height <= 0 ? PixelHeight : sourceRect.Height;
+            int rowBytes = rectW * bpp;
+            for (int row = 0; row < rectH; row++) {
+                int srcOff = (sourceRect.Y + row) * srcStride + sourceRect.X * bpp;
+                int n = Math.Min(rowBytes, _pixels.Length - srcOff);
+                if (n <= 0) break;
+                System.Runtime.InteropServices.Marshal.Copy(_pixels, srcOff, buffer + row * stride, n);
+            }
+        }
 
         public static BitmapSource Create(int width, int height, double dpiX, double dpiY, PixelFormat format, object palette, Array pixels, int stride) {
-            return new BitmapSource { PixelWidth = width, PixelHeight = height, Format = format };
+            var bs = new BitmapSource { PixelWidth = width, PixelHeight = height, Format = format, DpiX = (int)dpiX, DpiY = (int)dpiY, _stride = stride };
+            int bytes = Buffer.ByteLength(pixels);
+            bs._pixels = new byte[bytes];
+            Buffer.BlockCopy(pixels, 0, bs._pixels, 0, bytes);
+            return bs;
         }
         public static BitmapSource Create(int width, int height, double dpiX, double dpiY, PixelFormat format, object palette, IntPtr buffer, int bufferSize, int stride) {
-            return new BitmapSource { PixelWidth = width, PixelHeight = height, Format = format };
+            var bs = new BitmapSource { PixelWidth = width, PixelHeight = height, Format = format, DpiX = (int)dpiX, DpiY = (int)dpiY, _stride = stride };
+            bs._pixels = new byte[bufferSize];
+            if (buffer != IntPtr.Zero) {
+                System.Runtime.InteropServices.Marshal.Copy(buffer, bs._pixels, 0, bufferSize);
+            }
+            return bs;
         }
     }
 
 
     public class WriteableBitmap : BitmapSource {
+        // Pin the managed byte array so consumers calling BackBuffer get a
+        // stable IntPtr they can write through. NINA's stretch path uses
+        // this to write the stretch map output via Marshal.Copy.
+        private System.Runtime.InteropServices.GCHandle _pinnedHandle;
+
         public WriteableBitmap(int width, int height, double dpiX, double dpiY, PixelFormat format, object palette) {
             PixelWidth = width; PixelHeight = height; Format = format;
+            DpiX = (int)dpiX; DpiY = (int)dpiY;
+            int bpp = Math.Max(1, format.BitsPerPixel / 8);
+            _stride = width * bpp;
+            _pixels = new byte[height * _stride];
+            _pinnedHandle = System.Runtime.InteropServices.GCHandle.Alloc(_pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
         }
         public WriteableBitmap(BitmapSource source) {
             PixelWidth = source.PixelWidth; PixelHeight = source.PixelHeight; Format = source.Format;
+            DpiX = source.DpiX; DpiY = source.DpiY;
+            int bpp = Math.Max(1, Format.BitsPerPixel / 8);
+            _stride = source._stride > 0 ? source._stride : PixelWidth * bpp;
+            int sz = PixelHeight * _stride;
+            _pixels = new byte[sz];
+            if (source._pixels != null) {
+                Buffer.BlockCopy(source._pixels, 0, _pixels, 0, Math.Min(source._pixels.Length, sz));
+            }
+            _pinnedHandle = System.Runtime.InteropServices.GCHandle.Alloc(_pixels, System.Runtime.InteropServices.GCHandleType.Pinned);
         }
-        public IntPtr BackBuffer => IntPtr.Zero;
-        public int BackBufferStride => PixelWidth * (Format.BitsPerPixel / 8);
+        public IntPtr BackBuffer => _pinnedHandle.IsAllocated ? _pinnedHandle.AddrOfPinnedObject() : IntPtr.Zero;
+        public int BackBufferStride => _stride > 0 ? _stride : PixelWidth * Math.Max(1, Format.BitsPerPixel / 8);
         public void Lock() { }
         public void Unlock() { }
-        public void WritePixels(Int32Rect rect, Array buffer, int stride, int offset) { }
+        public void WritePixels(Int32Rect rect, Array buffer, int stride, int offset) {
+            if (_pixels == null) return;
+            int bpp = Math.Max(1, Format.BitsPerPixel / 8);
+            int rectW = rect.Width <= 0 ? PixelWidth : rect.Width;
+            int rectH = rect.Height <= 0 ? PixelHeight : rect.Height;
+            int rowBytes = rectW * bpp;
+            int srcByteOff = offset * (Buffer.ByteLength(buffer) / Math.Max(1, buffer.Length));
+            for (int row = 0; row < rectH; row++) {
+                int dstOff = (rect.Y + row) * _stride + rect.X * bpp;
+                int srcOff = srcByteOff + row * stride;
+                int n = Math.Min(rowBytes, _pixels.Length - dstOff);
+                if (n <= 0) break;
+                Buffer.BlockCopy(buffer, srcOff, _pixels, dstOff, n);
+            }
+        }
         public void AddDirtyRect(Int32Rect rect) { }
+
+        ~WriteableBitmap() {
+            if (_pinnedHandle.IsAllocated) _pinnedHandle.Free();
+        }
     }
 
     public class FormatConvertedBitmap : BitmapSource {

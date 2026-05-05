@@ -19,4 +19,8 @@ public record CaptureRequest
     /// Human-readable plan name at capture time. Snapshotted so the library browser can show
     /// "M42 Orion Nebula" as a folder label without re-joining against a live plan list.
     public string? PlanName { get; init; }
+    /// Optional dither pixel offset to apply BEFORE this capture. Set by the
+    /// sequencer when it wants automatic dither between Light frames; ignored
+    /// for non-Light or when PHD2 isn't guiding. 0 = no dither.
+    public double DitherPixels { get; init; } = 0;
 }

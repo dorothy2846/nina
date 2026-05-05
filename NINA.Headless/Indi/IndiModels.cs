@@ -45,6 +45,12 @@ public sealed class IndiProperty
     public IndiPropertyState State { get; set; } = IndiPropertyState.Idle;
     public IndiPropertyPerm Perm { get; set; } = IndiPropertyPerm.ReadOnly;
     public IndiSwitchRule Rule { get; set; } = IndiSwitchRule.AnyOfMany;
+    /// Wall-clock UTC of the most recent def/set vector that touched this
+    /// property. Used by the sensor-staleness watchdog to flag weather /
+    /// safety monitors that have stopped publishing fresh readings.
+    public DateTime LastUpdated { get; set; } = DateTime.UtcNow;
+
+    public DateTime? Timestamp => LastUpdated;
 
     public ConcurrentDictionary<string, IndiElement> Elements { get; } = new();
 

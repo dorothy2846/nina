@@ -19,11 +19,59 @@ public class DiagnosticsController : ControllerBase
 {
     private readonly IndiDiscoveryService _indi;
     private readonly EquipmentSelectionService _equipment;
+    private readonly CameraStreamService _stream;
 
-    public DiagnosticsController(IndiDiscoveryService indi, EquipmentSelectionService equipment)
+    public DiagnosticsController(IndiDiscoveryService indi, EquipmentSelectionService equipment, CameraStreamService stream)
     {
         _indi = indi;
         _equipment = equipment;
+        _stream = stream;
+    }
+
+    /// <summary>Per-frame stage timings for the streaming pipeline. Returns
+    /// the last 60 frames' (T_blob → T_processed → T_pushed_to_ffmpeg) plus
+    /// derived deltas. Used to localize end-to-end latency:
+    ///   capture+debayer = T_processed - T_blob
+    ///   queue           = T_pushed - T_processed
+    /// The remaining latency (encoder + WebRTC + iOS) is computed iOS-side
+    /// from the burned-in server wall-clock vs iOS wall-clock at render time.
+    /// </summary>
+    [HttpGet("streamLatency")]
+    public IActionResult StreamLatency()
+    {
+        var now = DateTime.UtcNow;
+        var samples = _stream.RecentFrameTimings.Select(t => new
+        {
+            frame = t.FrameNumber,
+            blobReceivedUtc = t.BlobReceived,
+            ageMs = (int)(now - t.BlobReceived).TotalMilliseconds,
+            captureMs = (int)(t.ProcessingDone - t.BlobReceived).TotalMilliseconds,
+            queueMs = (int)(t.PushedToFfmpeg - t.ProcessingDone).TotalMilliseconds,
+            encodeMs = t.IvfEmitted.HasValue
+                ? (int)(t.IvfEmitted.Value - t.PushedToFfmpeg).TotalMilliseconds
+                : (int?)null,
+        }).ToArray();
+
+        var captureAvg = samples.Length > 0 ? samples.Average(s => s.captureMs) : 0;
+        var queueAvg = samples.Length > 0 ? samples.Average(s => s.queueMs) : 0;
+        var encodedSamples = samples.Where(s => s.encodeMs.HasValue).ToArray();
+        var encodeAvg = encodedSamples.Length > 0 ? encodedSamples.Average(s => s.encodeMs!.Value) : 0;
+
+        // Server-side cumulative latency (capture → IVF emit). The remaining
+        // budget (network + jitter buffer + decode + render) is iOS-side and
+        // visible in the WebRTC stats HUD on the client.
+        var serverCumulativeAvgMs = (int)(captureAvg + queueAvg + encodeAvg);
+
+        return Ok(new
+        {
+            generatedAtUtc = now,
+            count = samples.Length,
+            avgCaptureMs = (int)captureAvg,
+            avgQueueMs = (int)queueAvg,
+            avgEncodeMs = (int)encodeAvg,
+            serverCumulativeAvgMs,
+            samples
+        });
     }
 
     /// <summary>Full INDI property dump plus what our capability probes see. Not

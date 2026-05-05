@@ -9,13 +9,14 @@ public static class FitsReader
 {
     public static (float[] pixels, int width, int height) Read(byte[] bytes)
     {
-        var (w, h, bitpix, offset) = ParseHeader(bytes);
-        return (ReadPixels(bytes, offset, w, h, bitpix), w, h);
+        var hdr = ParseHeader(bytes);
+        return (ReadPixels(bytes, hdr.dataOffset, hdr.width, hdr.height, hdr.bitpix, hdr.bzero, hdr.bscale), hdr.width, hdr.height);
     }
 
-    public static (int width, int height, int bitpix, int dataOffset) ParseHeader(byte[] bytes)
+    public static (int width, int height, int bitpix, int dataOffset, double bzero, double bscale) ParseHeader(byte[] bytes)
     {
         int naxis1 = 0, naxis2 = 0, bitpix = 0;
+        double bzero = 0, bscale = 1;
         int offset = 0;
         while (offset < bytes.Length)
         {
@@ -27,34 +28,45 @@ public static class FitsReader
                 {
                     if (naxis1 == 0 || naxis2 == 0 || bitpix == 0)
                         throw new InvalidDataException("FITS: missing NAXIS1/NAXIS2/BITPIX");
-                    return (naxis1, naxis2, bitpix, blockEnd);
+                    return (naxis1, naxis2, bitpix, blockEnd, bzero, bscale);
                 }
-                Extract(card, "NAXIS1", ref naxis1);
-                Extract(card, "NAXIS2", ref naxis2);
-                Extract(card, "BITPIX", ref bitpix);
+                ExtractInt(card, "NAXIS1", ref naxis1);
+                ExtractInt(card, "NAXIS2", ref naxis2);
+                ExtractInt(card, "BITPIX", ref bitpix);
+                ExtractDouble(card, "BZERO", ref bzero);
+                ExtractDouble(card, "BSCALE", ref bscale);
             }
             offset = blockEnd;
         }
         throw new InvalidDataException("FITS: END card not found");
     }
 
-    public static float[] ReadPixels(byte[] bytes, int dataOffset, int width, int height, int bitpix)
+    /// <summary>Read pixels honouring BZERO + BSCALE so unsigned-shifted FITS
+    /// (BITPIX=16, BZERO=32768 — the standard INDI/PlayerOne/ZWO output) come
+    /// out as the ushort the driver actually captured. Without this, a
+    /// saturated daylight frame (raw ushort 65000) reads back as 32232 and
+    /// every pixel clusters in a tiny range — autostretch then maps the
+    /// whole frame to black.</summary>
+    public static float[] ReadPixels(byte[] bytes, int dataOffset, int width, int height, int bitpix, double bzero = 0, double bscale = 1)
     {
         var count = width * height;
         var px = new float[count];
+        var scale = (float)bscale;
+        var zero = (float)bzero;
         switch (bitpix)
         {
             case 8:
-                for (int i = 0; i < count; i++) px[i] = bytes[dataOffset + i];
+                for (int i = 0; i < count; i++) px[i] = bytes[dataOffset + i] * scale + zero;
                 break;
             case 16:
-                // FITS stores big-endian signed 16 per standard; unsigned drivers apply BZERO=32768
-                // externally but most raw sensor dumps are effectively unsigned ushort.
+                // FITS BITPIX=16 is SIGNED big-endian. Unsigned data is shifted
+                // into signed range by BZERO=32768; we undo that here.
                 for (int i = 0; i < count; i++)
                 {
                     var b0 = bytes[dataOffset + i * 2];
                     var b1 = bytes[dataOffset + i * 2 + 1];
-                    px[i] = (ushort)((b0 << 8) | b1);
+                    short s = (short)((b0 << 8) | b1);
+                    px[i] = s * scale + zero;
                 }
                 break;
             case -32:
@@ -65,7 +77,7 @@ public static class FitsReader
                     buf[1] = bytes[dataOffset + i * 4 + 2];
                     buf[2] = bytes[dataOffset + i * 4 + 1];
                     buf[3] = bytes[dataOffset + i * 4 + 0];
-                    px[i] = BitConverter.ToSingle(buf, 0);
+                    px[i] = BitConverter.ToSingle(buf, 0) * scale + zero;
                 }
                 break;
             default:
@@ -74,14 +86,28 @@ public static class FitsReader
         return px;
     }
 
-    private static void Extract(string card, string key, ref int target)
+    private static void ExtractInt(string card, string key, ref int target)
     {
-        if (!card.StartsWith(key)) return;
+        var v = ExtractValue(card, key);
+        if (v == null) return;
+        if (int.TryParse(v, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var n))
+            target = n;
+    }
+
+    private static void ExtractDouble(string card, string key, ref double target)
+    {
+        var v = ExtractValue(card, key);
+        if (v == null) return;
+        if (double.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d))
+            target = d;
+    }
+
+    private static string? ExtractValue(string card, string key)
+    {
+        if (!card.StartsWith(key)) return null;
         var eq = card.IndexOf('=');
-        if (eq < 0) return;
+        if (eq < 0) return null;
         var slash = card.IndexOf('/', eq);
-        var valPart = (slash < 0 ? card[(eq + 1)..] : card[(eq + 1)..slash]).Trim();
-        if (int.TryParse(valPart, System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var v))
-            target = v;
+        return (slash < 0 ? card[(eq + 1)..] : card[(eq + 1)..slash]).Trim();
     }
 }

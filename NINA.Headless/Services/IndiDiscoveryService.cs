@@ -1,6 +1,15 @@
 using System.Collections.Concurrent;
 using NINA.Core.Enum;
 using NINA.Equipment.Equipment.MyCamera;
+using NINA.Equipment.Equipment.MyTelescope;
+using NINA.Equipment.Equipment.MyFocuser;
+using NINA.Equipment.Equipment.MyFilterWheel;
+using NINA.Equipment.Equipment.MyRotator;
+using NINA.Equipment.Equipment.MyDome;
+using NINA.Equipment.Equipment.MyFlatDevice;
+using NINA.Equipment.Equipment.MyWeatherData;
+using NINA.Equipment.Equipment.MySafetyMonitor;
+using NINA.Equipment.Equipment.MySwitch;
 using NINA.Headless.Indi;
 
 namespace NINA.Headless.Services;
@@ -24,6 +33,18 @@ public class IndiDiscoveryService : BackgroundService
 
     public bool IsTelescopeParked(string deviceName) =>
         _parkedTelescope.TryGetValue(deviceName, out var p) && p;
+
+    /// True when the device exists in the INDI device list and reports
+    /// its CONNECTION switch as on. Used by the mediator bridge so a
+    /// disconnected device flips the consumer-visible Connected flag.
+    public bool IsTelescopeReady(string deviceName) => IsDeviceConnected(deviceName);
+    public bool IsFocuserReady(string deviceName) => IsDeviceConnected(deviceName);
+    private bool IsDeviceConnected(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null || !dev.IsConnected) return false;
+        return IntentConnected(deviceName);
+    }
 
     private bool IntentConnected(string deviceName)
     {
@@ -110,6 +131,23 @@ public class IndiDiscoveryService : BackgroundService
             _intent[deviceName] = connected ? ConnectionIntent.Connected : ConnectionIntent.Disconnected;
             if (_intentWorker.TryGetValue(deviceName, out var existing) && !existing.IsCompleted) return;
             _intentWorker[deviceName] = Task.Run(() => IntentWorkerLoop(deviceName));
+        }
+    }
+
+    /// On client reconnect the IntentWorkerLoops we had running all exited
+    /// (their `client.IsConnected` check tripped). Re-spawn one per device
+    /// that still has `Connected` intent so the driver gets re-armed as
+    /// soon as it re-defs CONNECTION.
+    private void RestoreIntentWorkers()
+    {
+        lock (_intentLock)
+        {
+            foreach (var (deviceName, intent) in _intent)
+            {
+                if (intent != ConnectionIntent.Connected) continue;
+                if (_intentWorker.TryGetValue(deviceName, out var existing) && !existing.IsCompleted) continue;
+                _intentWorker[deviceName] = Task.Run(() => IntentWorkerLoop(deviceName));
+            }
         }
     }
 
@@ -271,25 +309,35 @@ public class IndiDiscoveryService : BackgroundService
         //   GUIDE_RATE            — numeric fraction of sidereal for guide pulses
         string? slewRateLabel = null;
         string[]? availableSlewRates = null;
+        string[]? slewRateDisplayLabels = null;
         if (dev.Properties.TryGetValue("TELESCOPE_SLEW_RATE", out var sr))
         {
             slewRateLabel = sr.Elements.Values.FirstOrDefault(e => e.ValueOn)?.Name;
-            // Preserve the driver's ordering (INDI defines it) but sort by leading integer for
-            // the app's UI. AM5 is already "1x"…"10x"; older LX200 drivers might be "Guide/
-            // Centering/Find/Max" and sort by an arbitrary stable order.
-            availableSlewRates = sr.Elements.Values
-                .Select(e => e.Name)
-                .OrderBy(n =>
-                {
-                    var digits = new string(n.TakeWhile(char.IsDigit).ToArray());
-                    return int.TryParse(digits, out var v) ? v : int.MaxValue;
-                })
-                .ThenBy(n => n, StringComparer.Ordinal)
+            // Sort by the leading numeric prefix (handles "0.5x", "1x", "10x",
+            // "400x"). Semantic names ("SLEW_GUIDE") fall to the end in the
+            // INDI canonical order: GUIDE → CENTERING → FIND → MAX.
+            var orderedElements = sr.Elements.Values
+                .OrderBy(e => ResolveElementRate(e) ?? double.MaxValue)
+                .ThenBy(e => SemanticOrder(e.Name))
+                .ThenBy(e => e.Name, StringComparer.Ordinal)
+                .ToArray();
+            availableSlewRates = orderedElements.Select(e => e.Name).ToArray();
+            // Parallel array of friendly display labels — INDI's <defSwitch
+            // label="..."> attribute. Falls back to the name when the driver
+            // didn't supply a label.
+            slewRateDisplayLabels = orderedElements
+                .Select(e => string.IsNullOrEmpty(e.Label) ? e.Name : e.Label!)
                 .ToArray();
         }
         double? variableSlewRate = null;
+        double? variableSlewRateMin = null;
+        double? variableSlewRateMax = null;
         if (dev.Properties.TryGetValue("VARIABLE_SLEW_RATE", out var vsr))
+        {
             variableSlewRate = vsr["RATE"]?.AsDouble;
+            variableSlewRateMin = vsr["RATE"]?.Min;
+            variableSlewRateMax = vsr["RATE"]?.Max;
+        }
         double? guideRate = null;
         if (dev.Properties.TryGetValue("GUIDE_RATE", out var gr))
             guideRate = gr["RATE"]?.AsDouble;
@@ -321,12 +369,67 @@ public class IndiDiscoveryService : BackgroundService
             siderealTime,
             slewRateLabel,
             availableSlewRates,
+            slewRateDisplayLabels,
             variableSlewRate,
+            variableSlewRateMin,
+            variableSlewRateMax,
             guideRate,
             canFindHome,
             canPark,
             canSetTracking
         };
+    }
+
+    /// <summary>Resolve an INDI rate element's "intended" numeric value.
+    /// Prefers the element's LABEL (which encodes the human meaning, e.g.
+    /// AM5 element name "10x" has label "1440x" — the actual ×sidereal
+    /// multiplier) over the element NAME. Falls back to name when no label
+    /// is published or the label has no numeric prefix.</summary>
+    private static double? ResolveElementRate(IndiElement el)
+    {
+        if (!string.IsNullOrEmpty(el.Label))
+        {
+            var fromLabel = LeadingDecimal(el.Label!);
+            if (fromLabel.HasValue) return fromLabel;
+        }
+        return LeadingDecimal(el.Name);
+    }
+
+    /// <summary>Parse a leading decimal number from a TELESCOPE_SLEW_RATE
+    /// element name. Handles plain integers ("1x", "10x"), decimals
+    /// ("0.5x", "1.5x"), and rejects pure semantic names ("SLEW_GUIDE",
+    /// "MAX"). Returns null when no leading number is present.</summary>
+    private static double? LeadingDecimal(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return null;
+        int i = 0;
+        bool seenDot = false;
+        while (i < s.Length)
+        {
+            var c = s[i];
+            if (char.IsDigit(c)) { i++; continue; }
+            if (c == '.' && !seenDot) { seenDot = true; i++; continue; }
+            break;
+        }
+        if (i == 0) return null;
+        var head = s.Substring(0, i);
+        if (head == ".") return null;
+        return double.TryParse(head, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var v)
+            ? v : (double?)null;
+    }
+
+    /// <summary>Sort semantic INDI rate names in their canonical order:
+    /// GUIDE (slowest) → CENTERING → FIND → SLEW/MAX (fastest). Anything
+    /// not on the canonical list falls between FIND and MAX in stable
+    /// alphabetical order.</summary>
+    private static int SemanticOrder(string name)
+    {
+        var u = name.ToUpperInvariant();
+        if (u.Contains("GUIDE")) return 0;
+        if (u.Contains("CENTERING") || u.Contains("CENTER")) return 1;
+        if (u.Contains("FIND")) return 2;
+        if (u.Contains("MAX") || u == "SLEW" || u.Contains("SLEW_MAX")) return 4;
+        return 3;
     }
 
     private static double ComputeLstHours(double lonDeg)
@@ -685,40 +788,231 @@ public class IndiDiscoveryService : BackgroundService
     /// the button's intent here so that "North" always means "DEC increases toward +90°"
     /// regardless of mechanical pier orientation — matching every user expectation and the
     /// INDI spec.</summary>
-    public async Task TelescopeMoveAsync(string deviceName, string direction, double? rateMultiplier, CancellationToken ct)
+    /// Set TELESCOPE_SLEW_RATE without triggering motion. Used by the iOS
+    /// chip strip to "preview" a rate selection so the highlighted chip
+    /// reflects the driver's actual state — without this, the rate change
+    /// only happened as a side-effect of a button press, leaving chips
+    /// stuck in the pending colour until the user moved the mount.
+    public async Task TelescopeSetSlewRateAsync(string deviceName, string? rateName, double? siderealRate, CancellationToken ct)
     {
         var client = _client; if (client == null) return;
         var dev = client.GetDevice(deviceName);
+        if (dev == null) return;
 
-        if (dev != null && rateMultiplier.HasValue && dev.Properties.TryGetValue("TELESCOPE_SLEW_RATE", out var rateProp))
+        // siderealRate path: caller picked a numeric rate from a curated chip
+        // strip backed by VARIABLE_SLEW_RATE.RATE_MAX (e.g. AM5 1..1440).
+        // Push the number directly; sync the discrete TELESCOPE_SLEW_RATE
+        // switch to its closest digit-prefixed element for UI consistency.
+        if (siderealRate.HasValue
+            && dev.Properties.TryGetValue("VARIABLE_SLEW_RATE", out var vsr)
+            && vsr["RATE"] != null)
         {
-            // Parse leading integer from each element name ("1x", "2x", …, "10x") and pick
-            // the one closest to the requested multiplier. Clamps naturally to the driver's
-            // exposed range (e.g. AM5 1–10).
-            string? best = null;
-            double bestDist = double.MaxValue;
-            foreach (var el in rateProp.Elements.Values)
+            var min = vsr["RATE"]?.Min ?? 0;
+            var max = vsr["RATE"]?.Max ?? 1440;
+            var clamped = Math.Clamp(siderealRate.Value, min, max);
+            await client.SetNumberAsync(deviceName, "VARIABLE_SLEW_RATE", "RATE", clamped, ct);
+            _log.LogInformation("Telescope: VARIABLE_SLEW_RATE→{Rate}× sidereal on {Device}", clamped, deviceName);
+
+            // Best-effort: also flip the discrete switch to whatever digit-
+            // prefixed element is closest. Drivers that don't expose the
+            // switch just skip silently; drivers that only honor the switch
+            // (no VARIABLE) get covered by the rateName branch below.
+            if (dev.Properties.TryGetValue("TELESCOPE_SLEW_RATE", out var rp))
             {
-                var digits = new string(el.Name.TakeWhile(char.IsDigit).ToArray());
-                if (!int.TryParse(digits, out var v)) continue;
-                var dist = Math.Abs(v - rateMultiplier.Value);
-                if (dist < bestDist) { bestDist = dist; best = el.Name; }
+                string? best = null;
+                double bestDist = double.MaxValue;
+                foreach (var el in rp.Elements.Values)
+                {
+                    // Match against the element's resolved value (label
+                    // preferred over name) — AM5's element name "10x" has
+                    // label "1440x", and we want the highlighted preset to
+                    // reflect the actual sidereal multiplier the chip means.
+                    var num = ResolveElementRate(el);
+                    if (!num.HasValue || num.Value <= 0) continue;
+                    var dist = Math.Abs(num.Value - clamped);
+                    if (dist < bestDist) { bestDist = dist; best = el.Name; }
+                }
+                if (best != null)
+                {
+                    var tuples = rp.Elements.Values.Select(e => (e.Name, e.Name == best)).ToArray();
+                    await client.SetSwitchManyAsync(deviceName, "TELESCOPE_SLEW_RATE", tuples, ct);
+                }
             }
-            if (best != null && rateProp[best]?.ValueOn != true)
+            return;
+        }
+
+        // rateName path (legacy, also used when caller deliberately wants a
+        // semantic rate like "GUIDE"/"CENTERING" rather than a number).
+        if (string.IsNullOrEmpty(rateName)) return;
+        if (!dev.Properties.TryGetValue("TELESCOPE_SLEW_RATE", out var rateProp)) return;
+        if (rateProp[rateName!] == null)
+        {
+            _log.LogWarning("Telescope: SLEW_RATE element '{Rate}' not exposed by {Device} (available: {List})",
+                rateName, deviceName,
+                string.Join(",", rateProp.Elements.Values.Select(e => e.Name)));
+            return;
+        }
+        var tuples2 = rateProp.Elements.Values.Select(e => (e.Name, e.Name == rateName)).ToArray();
+        await client.SetSwitchManyAsync(deviceName, "TELESCOPE_SLEW_RATE", tuples2, ct);
+        _log.LogInformation("Telescope: SLEW_RATE set to {Rate} on {Device}", rateName, deviceName);
+
+        if (dev.Properties.TryGetValue("VARIABLE_SLEW_RATE", out var vsr2) && vsr2["RATE"] != null)
+        {
+            // Resolve via the matched element's label-or-name — the named
+            // rate "10x" on AM5 actually means 1440× sidereal per its label,
+            // so we push that, not the integer-from-name.
+            var matched = rateProp[rateName!];
+            var num = matched != null ? ResolveElementRate(matched) : LeadingDecimal(rateName!);
+            if (num.HasValue && num.Value > 0)
             {
-                var tuples = rateProp.Elements.Values.Select(e => (e.Name, e.Name == best)).ToArray();
-                try { await client.SetSwitchManyAsync(deviceName, "TELESCOPE_SLEW_RATE", tuples, ct); } catch { }
+                var min = vsr2["RATE"]?.Min ?? 0;
+                var max = vsr2["RATE"]?.Max ?? 1440;
+                var clamped = Math.Clamp(num.Value, min, max);
+                await client.SetNumberAsync(deviceName, "VARIABLE_SLEW_RATE", "RATE", clamped, ct);
+                _log.LogInformation("Telescope: VARIABLE_SLEW_RATE→{Rate}× sidereal on {Device}", clamped, deviceName);
+            }
+        }
+    }
+
+    /// Send an ST4-style pulse-guide command — short timed motion in the
+    /// requested direction at the driver's current guide rate. The mount
+    /// fires the pulse and self-stops; useful for backlash testing,
+    /// guiding-port verification, and as the building block for an in-
+    /// server guider that doesn't depend on PHD2.
+    ///
+    /// INDI standard properties:
+    ///   TELESCOPE_TIMED_GUIDE_NS  — TIMED_GUIDE_N / TIMED_GUIDE_S (ms)
+    ///   TELESCOPE_TIMED_GUIDE_WE  — TIMED_GUIDE_W / TIMED_GUIDE_E (ms)
+    /// Direction param is "N" / "S" / "E" / "W" (matches mount move API).
+    public async Task TelescopePulseGuideAsync(string deviceName, string direction, int durationMs, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return;
+        var d = direction.Trim().ToUpperInvariant();
+        var (prop, elem) = d switch
+        {
+            "N" => ("TELESCOPE_TIMED_GUIDE_NS", "TIMED_GUIDE_N"),
+            "S" => ("TELESCOPE_TIMED_GUIDE_NS", "TIMED_GUIDE_S"),
+            "E" => ("TELESCOPE_TIMED_GUIDE_WE", "TIMED_GUIDE_E"),
+            "W" => ("TELESCOPE_TIMED_GUIDE_WE", "TIMED_GUIDE_W"),
+            _ => ("", ""),
+        };
+        if (string.IsNullOrEmpty(prop)) return;
+        await client.SetNumberAsync(deviceName, prop, elem, durationMs, ct);
+    }
+
+    /// Read the mount's GUIDE_RATE values (RA/Dec rate in fraction of
+    /// sidereal). Surfaces them so the iOS pulse-guide test UI can show
+    /// the user "this pulse will move ~X arcsec" — important because
+    /// mounts vary widely in default guide rate.
+    public (double? raRate, double? decRate) TryGetGuideRate(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return (null, null);
+        if (!dev.Properties.TryGetValue("GUIDE_RATE", out var gr)) return (null, null);
+        return (gr["GUIDE_RATE_NS"]?.AsDouble ?? gr["GUIDE_RATE_WE"]?.AsDouble,
+                gr["GUIDE_RATE_WE"]?.AsDouble ?? gr["GUIDE_RATE_NS"]?.AsDouble);
+    }
+
+    public async Task TelescopeMoveAsync(string deviceName, string direction, double? rateMultiplier, CancellationToken ct, string? rateName = null, double? siderealRate = null)
+    {
+        var client = _client; if (client == null) return;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return;
+
+        // Resolve TELESCOPE_SLEW_RATE switch element. Priority:
+        //   1. Explicit rateName (caller picked a switch element directly)
+        //   2. Closest digit-prefixed element to siderealRate (iOS curated chips)
+        //   3. Closest digit-prefixed element to rateMultiplier (legacy)
+        string? best = null;
+        IndiProperty? rateProp = null;
+        if (dev.Properties.TryGetValue("TELESCOPE_SLEW_RATE", out rateProp))
+        {
+            if (!string.IsNullOrEmpty(rateName) && rateProp[rateName!] != null)
+            {
+                best = rateName;
+            }
+            else if (!string.IsNullOrEmpty(rateName))
+            {
+                best = rateProp.Elements.Values
+                    .FirstOrDefault(e => string.Equals(e.Name, rateName, StringComparison.OrdinalIgnoreCase))?.Name;
+                if (best == null)
+                {
+                    _log.LogWarning("Telescope: rateName '{Name}' not exposed by {Device} (available: {List})",
+                        rateName, deviceName,
+                        string.Join(",", rateProp.Elements.Values.Select(e => e.Name)));
+                }
+            }
+            var fallbackTarget = siderealRate ?? rateMultiplier;
+            if (best == null && fallbackTarget.HasValue)
+            {
+                double bestDist = double.MaxValue;
+                foreach (var el in rateProp.Elements.Values)
+                {
+                    var num = ResolveElementRate(el);
+                    if (!num.HasValue || num.Value <= 0) continue;
+                    var dist = Math.Abs(num.Value - fallbackTarget.Value);
+                    if (dist < bestDist) { bestDist = dist; best = el.Name; }
+                }
             }
         }
 
-        // Pass the button direction straight through to the driver's motor switch.
-        // Earlier this applied a pier-side XOR so "North" always meant celestial +DEC —
-        // but the server only reads pier ONCE per press, and crossing the pole during
-        // the move silently flipped PIER_SIDE without the server re-evaluating. Result:
-        // successive N presses near the pole sent opposite motor commands, producing
-        // the "N goes one way, next N goes the other" bouncing the user reported.
-        // Mapping button→motor directly trades a one-time "N feels reversed on PIER_WEST"
-        // learning cost for consistent behavior during any single operation.
+        // Many mount drivers cache the slew rate at the moment motion *starts* and
+        // ignore TELESCOPE_SLEW_RATE updates while MOTION_NS/WE is active (AM5
+        // confirmed). Stop motion → change rate → restart motion. Without this,
+        // "tap 1x while holding N" left the mount slewing at whatever rate it
+        // started with — the regression the user reported.
+        await client.SetSwitchManyAsync(deviceName, "TELESCOPE_MOTION_NS",
+            new[] { ("MOTION_NORTH", false), ("MOTION_SOUTH", false) }, ct);
+        await client.SetSwitchManyAsync(deviceName, "TELESCOPE_MOTION_WE",
+            new[] { ("MOTION_WEST", false), ("MOTION_EAST", false) }, ct);
+
+        if (best != null && rateProp != null)
+        {
+            var tuples = rateProp.Elements.Values.Select(e => (e.Name, e.Name == best)).ToArray();
+            await client.SetSwitchManyAsync(deviceName, "TELESCOPE_SLEW_RATE", tuples, ct);
+            _log.LogInformation("Telescope: SLEW_RATE→{Rate} on {Device} before MOTION_{Dir} (rateName={ReqName}, mult={Mult})",
+                best, deviceName, direction, rateName ?? "(none)", rateMultiplier?.ToString() ?? "(none)");
+            // Event-driven settle: wait until the driver confirms the new element
+            // is ON and the property state is OK. Bounded so a non-publishing
+            // driver can't stall the press response.
+            await client.AwaitDeviceStateAsync(deviceName, d =>
+                d.Properties.TryGetValue("TELESCOPE_SLEW_RATE", out var p)
+                    && p[best!]?.ValueOn == true
+                    && p.State == IndiPropertyState.Ok,
+                TimeSpan.FromMilliseconds(500), ct);
+        }
+
+        // Push numeric VARIABLE_SLEW_RATE (sidereal multiples). Priority:
+        //   1. siderealRate (curated numeric chips — exact value)
+        //   2. digits parsed from resolved switch element ("Nx" → N)
+        //   3. rateMultiplier (legacy)
+        // Many mounts (AM5 confirmed) decouple this from the switch — without
+        // pushing the number, motor speed stays at whatever was last set.
+        if (dev.Properties.TryGetValue("VARIABLE_SLEW_RATE", out var vsr) && vsr["RATE"] != null)
+        {
+            double? targetVar = siderealRate;
+            if (targetVar == null && best != null && rateProp != null)
+            {
+                var matched = rateProp[best];
+                var num = matched != null ? ResolveElementRate(matched) : LeadingDecimal(best);
+                if (num.HasValue && num.Value > 0) targetVar = num.Value;
+            }
+            if (targetVar == null && rateMultiplier.HasValue && rateMultiplier.Value >= 1)
+                targetVar = rateMultiplier.Value;
+
+            if (targetVar.HasValue)
+            {
+                var min = vsr["RATE"]?.Min ?? 0;
+                var max = vsr["RATE"]?.Max ?? 1440;
+                var clamped = Math.Clamp(targetVar.Value, min, max);
+                await client.SetNumberAsync(deviceName, "VARIABLE_SLEW_RATE", "RATE", clamped, ct);
+                _log.LogInformation("Telescope: VARIABLE_SLEW_RATE→{Rate}× sidereal on {Device}", clamped, deviceName);
+            }
+        }
+
+        // Direction passes straight through. The previous pier-side XOR was removed
+        // because PIER_SIDE flips during a pole crossing without us re-evaluating,
+        // which produced the "N goes one way, next N goes the other" bouncing.
         var dir = direction.ToLowerInvariant();
         if (dir == "north" || dir == "south")
         {
@@ -1141,6 +1435,12 @@ public class IndiDiscoveryService : BackgroundService
         _client.BlobReceived += (device, prop, el, bytes, format) =>
         {
             if (prop != "CCD1") return; // INDI convention: primary sensor BLOB property
+            // Streaming and still capture share CCD1. Stream frames carry ".stream" /
+            // ".stream_jpg" formats and belong to CameraStreamService — never to the
+            // exposure TCS. Without this filter an orphaned stream wedges the next
+            // capture: the stream BLOB resolves the TCS with garbage bytes, then the
+            // real .fits BLOB arrives with no waiter and is dropped.
+            if (format != null && format.StartsWith(".stream", StringComparison.Ordinal)) return;
             if (_pendingExposure.TryRemove(device, out var tcs)) tcs.TrySetResult((bytes, format));
         };
         _blobHandlerRegistered = true;
@@ -1172,7 +1472,18 @@ public class IndiDiscoveryService : BackgroundService
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
             using var reg = cts.Token.Register(() => tcs.TrySetCanceled(cts.Token));
-            return await tcs.Task;
+            try
+            {
+                return await tcs.Task;
+            }
+            catch (OperationCanceledException)
+            {
+                // Tell the driver to abort the in-flight exposure. Without this,
+                // a stuck driver keeps the BUSY state and the next capture is
+                // refused or wedges the same way.
+                try { await AbortExposureAsync(deviceName, CancellationToken.None); } catch { }
+                throw;
+            }
         }
         finally
         {
@@ -1229,29 +1540,70 @@ public class IndiDiscoveryService : BackgroundService
         return new { connected = true, name = deviceName, currentPosition, currentFilterName, isMoving };
     }
 
+    /// <summary>Fires after the INDI socket dies (server crash, cable yank,
+    /// indiserver restart). Subscribers (camera stream, capture controller)
+    /// should treat in-flight operations as failed and tear down resources;
+    /// <see cref="ClientReconnected"/> restores the steady state.</summary>
+    public event Action<string>? ClientDisconnected;
+
+    /// <summary>Fires after a successful reconnect — fresh socket, fresh
+    /// getProperties subscription. Subscribers should re-resolve any
+    /// per-device state they cached (Bayer pattern, gain ranges, etc.) and
+    /// re-apply user-controlled settings (streaming exposure / binning) so
+    /// the user doesn't need to know the link blipped.</summary>
+    public event Action? ClientReconnected;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Let IndiServerManager bring up indiserver first.
         try { await Task.Delay(TimeSpan.FromSeconds(2), stoppingToken); } catch { return; }
 
+        // Exponential backoff so a flapping driver doesn't hammer indiserver
+        // (capped at 30 s — long enough to ride out a typical service
+        // restart, short enough that a real recovery is felt as snappy).
+        int attempt = 0;
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Signal completed cleanly so we can wait on a single fence
+            // instead of polling IsConnected. Disconnected event drains
+            // through this TCS — instant detection, no polling lag.
+            var dropped = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
             try
             {
                 _client = new IndiClient(_server.Host, _server.Port, _log);
                 _client.DevicesChanged += OnDevicesChanged;
+                _client.Disconnected += reason => dropped.TrySetResult(reason);
                 await _client.ConnectAsync(stoppingToken);
 
-                // Wait until cancelled or connection drops.
-                while (!stoppingToken.IsCancellationRequested && _client.IsConnected)
+                bool wasReconnect = attempt > 0;
+                attempt = 0;
+                if (wasReconnect)
                 {
-                    try { await Task.Delay(1000, stoppingToken); } catch { break; }
+                    _log.LogInformation("INDI: reconnected");
+                    // Re-spawn intent workers for any device the user had
+                    // explicitly connected before the drop. Intent state is
+                    // preserved across reconnects, so any device with
+                    // ConnectionIntent.Connected gets its CONNECTION switch
+                    // re-driven once the driver re-defs the property — the
+                    // user's session survives a server restart.
+                    RestoreIntentWorkers();
+                    try { ClientReconnected?.Invoke(); }
+                    catch (Exception ex) { _log.LogWarning(ex, "INDI: ClientReconnected handler threw"); }
                 }
+
+                // Block until the read loop signals disconnect (fault) OR
+                // shutdown is requested. No polling.
+                using var stopReg = stoppingToken.Register(() => dropped.TrySetResult("cancelled"));
+                var reason = await dropped.Task;
+                if (stoppingToken.IsCancellationRequested) break;
+                _log.LogWarning("INDI: connection dropped — {Reason}", reason);
+                try { ClientDisconnected?.Invoke(reason); }
+                catch (Exception ex) { _log.LogWarning(ex, "INDI: ClientDisconnected handler threw"); }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                _log.LogWarning(ex, "INDI discovery iteration failed; retry in 3s");
+                _log.LogWarning(ex, "INDI: connect attempt {Attempt} failed", attempt + 1);
             }
             finally
             {
@@ -1263,7 +1615,11 @@ public class IndiDiscoveryService : BackgroundService
                 }
             }
 
-            try { await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken); } catch { break; }
+            // 1s, 2s, 4s, 8s, 16s, 30s cap.
+            attempt++;
+            var backoff = TimeSpan.FromSeconds(Math.Min(30, 1 << Math.Min(attempt - 1, 5)));
+            _log.LogInformation("INDI: retry in {Backoff}s (attempt {Next})", (int)backoff.TotalSeconds, attempt + 1);
+            try { await Task.Delay(backoff, stoppingToken); } catch { break; }
         }
     }
 
@@ -1601,6 +1957,23 @@ public class IndiDiscoveryService : BackgroundService
             info.BitDepth = (int)(ip["CCD_BITSPERPIXEL"]?.AsDouble ?? 16);
         }
 
+        // Bayer pattern — INDI standard: CCD_CFA with text element CFA_TYPE
+        // ("RGGB" / "BGGR" / "GRBG" / "GBRG"). Absence of the property means
+        // mono sensor; default of CameraInfo.SensorType is Monochrome so we
+        // only need to upgrade it for colour cameras.
+        if (dev.Properties.TryGetValue("CCD_CFA", out var cfa))
+        {
+            var pattern = (cfa["CFA_TYPE"]?.Value ?? "").Trim().ToUpperInvariant();
+            info.SensorType = pattern switch
+            {
+                "RGGB" => SensorType.RGGB,
+                "BGGR" => SensorType.BGGR,
+                "GRBG" => SensorType.GRBG,
+                "GBRG" => SensorType.GBRG,
+                _      => SensorType.Monochrome,
+            };
+        }
+
         // Exposure progress
         if (dev.Properties.TryGetValue("CCD_EXPOSURE", out var ep))
         {
@@ -1613,6 +1986,198 @@ public class IndiDiscoveryService : BackgroundService
             }
         }
 
+        return info;
+    }
+
+    /// <summary>Build NINA's typed <see cref="TelescopeInfo"/> from current
+    /// INDI property values. Mirrors the anonymous-typed
+    /// <see cref="BuildTelescopeStatus"/> but returns the proper
+    /// strongly-typed model for mediator broadcast.</summary>
+    public TelescopeInfo? TryBuildTelescopeInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var hasConn = dev.Properties.ContainsKey("CONNECTION");
+        var connected = hasConn ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new TelescopeInfo
+        {
+            Connected = connected,
+            Name = deviceName,
+        };
+        if (!connected) return info;
+
+        if (dev.Properties.TryGetValue("EQUATORIAL_EOD_COORD", out var eq))
+        {
+            info.RightAscension = eq["RA"]?.AsDouble ?? 0;
+            info.Declination = eq["DEC"]?.AsDouble ?? 0;
+            info.Slewing = eq.State == IndiPropertyState.Busy;
+        }
+        if (dev.Properties.TryGetValue("GEOGRAPHIC_COORD", out var geo))
+        {
+            info.SiteLatitude = geo["LAT"]?.AsDouble ?? 0;
+            info.SiteLongitude = geo["LONG"]?.AsDouble ?? 0;
+            info.SiteElevation = geo["ELEV"]?.AsDouble ?? 0;
+        }
+        if (dev.Properties.TryGetValue("HORIZONTAL_COORD", out var hz))
+        {
+            info.Altitude = hz["ALT"]?.AsDouble ?? 0;
+            info.Azimuth = hz["AZ"]?.AsDouble ?? 0;
+        }
+        if (dev.Properties.TryGetValue("TELESCOPE_TRACK_STATE", out var ts))
+            info.TrackingEnabled = ts["TRACK_ON"]?.ValueOn ?? false;
+        if (_parkedTelescope.TryGetValue(deviceName, out var parked))
+            info.AtPark = parked;
+        else if (dev.Properties.TryGetValue("TELESCOPE_PARK", out var pk))
+            info.AtPark = pk["PARK"]?.ValueOn ?? false;
+        if (dev.Properties.TryGetValue("TELESCOPE_PIER_SIDE", out var ps))
+        {
+            info.SideOfPier = ps["PIER_EAST"]?.ValueOn == true ? PierSide.pierEast
+                            : ps["PIER_WEST"]?.ValueOn == true ? PierSide.pierWest
+                            : PierSide.pierUnknown;
+        }
+        return info;
+    }
+
+    public FilterWheelInfo? TryBuildFilterWheelInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new FilterWheelInfo { Connected = connected, Name = deviceName };
+        if (!connected) return info;
+        if (dev.Properties.TryGetValue("FILTER_SLOT", out var slot))
+        {
+            info.IsMoving = slot.State == IndiPropertyState.Busy;
+        }
+        return info;
+    }
+
+    public RotatorInfo? TryBuildRotatorInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new RotatorInfo { Connected = connected, Name = deviceName };
+        if (!connected) return info;
+        if (dev.Properties.TryGetValue("ABS_ROTATOR_ANGLE", out var ang))
+        {
+            info.Position = (float)(ang["ANGLE"]?.AsDouble ?? 0);
+            info.MechanicalPosition = info.Position;
+            info.IsMoving = ang.State == IndiPropertyState.Busy;
+        }
+        return info;
+    }
+
+    public DomeInfo? TryBuildDomeInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new DomeInfo { Connected = connected, Name = deviceName };
+        if (!connected) return info;
+        if (dev.Properties.TryGetValue("ABS_DOME_POSITION", out var pos))
+        {
+            info.Azimuth = pos["DOME_ABSOLUTE_POSITION"]?.AsDouble ?? double.NaN;
+            info.Slewing = pos.State == IndiPropertyState.Busy;
+        }
+        return info;
+    }
+
+    public FlatDeviceInfo? TryBuildFlatDeviceInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new FlatDeviceInfo { Connected = connected, Name = deviceName };
+        if (!connected) return info;
+        if (dev.Properties.TryGetValue("FLAT_LIGHT_INTENSITY", out var br))
+        {
+            info.Brightness = (int)(br["FLAT_LIGHT_INTENSITY_VALUE"]?.AsDouble ?? 0);
+        }
+        if (dev.Properties.TryGetValue("FLAT_LIGHT_CONTROL", out var sw))
+        {
+            info.LightOn = sw["FLAT_LIGHT_ON"]?.ValueOn ?? false;
+        }
+        return info;
+    }
+
+    public WeatherDataInfo? TryBuildWeatherInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new WeatherDataInfo { Connected = connected, Name = deviceName };
+        if (!connected) return info;
+        if (dev.Properties.TryGetValue("WEATHER_PARAMETERS", out var w))
+        {
+            info.Temperature = w["WEATHER_TEMPERATURE"]?.AsDouble ?? double.NaN;
+            info.Humidity = w["WEATHER_HUMIDITY"]?.AsDouble ?? double.NaN;
+            info.Pressure = w["WEATHER_PRESSURE"]?.AsDouble ?? double.NaN;
+            info.DewPoint = w["WEATHER_DEWPOINT"]?.AsDouble ?? double.NaN;
+            info.WindSpeed = w["WEATHER_WIND_SPEED"]?.AsDouble ?? double.NaN;
+            info.CloudCover = w["WEATHER_CLOUD_COVER"]?.AsDouble ?? double.NaN;
+            info.SkyBrightness = w["WEATHER_SKY_BRIGHTNESS"]?.AsDouble ?? double.NaN;
+            info.SkyTemperature = w["WEATHER_SKY_TEMPERATURE"]?.AsDouble ?? double.NaN;
+        }
+        return info;
+    }
+
+    public SafetyMonitorInfo? TryBuildSafetyMonitorInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new SafetyMonitorInfo { Connected = connected, Name = deviceName };
+        if (!connected) return info;
+        if (dev.Properties.TryGetValue("SAFETY", out var s))
+        {
+            info.IsSafe = s["SAFETY_STATE"]?.ValueOn ?? false;
+        }
+        return info;
+    }
+
+    public SwitchInfo? TryBuildSwitchInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        // Switch's WritableSwitches/ReadonlySwitches require concrete ISwitch
+        // implementations — we leave them empty for now since broadcasting
+        // just connection state already gates the consumer's "device present"
+        // checks. Per-switch state is exposed via the existing /switch/* endpoints.
+        return new SwitchInfo { Connected = connected, Name = deviceName };
+    }
+
+    public FocuserInfo? TryBuildFocuserInfo(string deviceName)
+    {
+        var dev = _client?.GetDevice(deviceName);
+        if (dev == null) return null;
+        var hasConn = dev.Properties.ContainsKey("CONNECTION");
+        var connected = hasConn ? dev.IsConnected : IntentConnected(deviceName);
+        var info = new FocuserInfo
+        {
+            Connected = connected,
+            Name = deviceName,
+        };
+        if (!connected) return info;
+
+        if (dev.Properties.TryGetValue("ABS_FOCUS_POSITION", out var pos))
+        {
+            info.Position = (int)(pos["FOCUS_ABSOLUTE_POSITION"]?.AsDouble ?? 0);
+            info.IsMoving = pos.State == IndiPropertyState.Busy;
+        }
+        if (dev.Properties.TryGetValue("FOCUS_TEMPERATURE", out var t))
+        {
+            info.Temperature = t["TEMPERATURE"]?.AsDouble ?? double.NaN;
+        }
+        else if (dev.Properties.TryGetValue("FOCUSER_TEMPERATURE", out var t2))
+        {
+            info.Temperature = t2["TEMPERATURE"]?.AsDouble ?? double.NaN;
+        }
+        if (dev.Properties.TryGetValue("FOCUS_STEP_SIZE", out var ss))
+        {
+            info.StepSize = ss["STEP_SIZE"]?.AsDouble ?? 0;
+        }
         return info;
     }
 }

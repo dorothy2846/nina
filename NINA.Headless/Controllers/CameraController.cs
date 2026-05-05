@@ -26,8 +26,9 @@ public class CameraController : ControllerBase
     private readonly CalibrationBatchService _calibration;
     private readonly CalibrationLibrary _library;
     private readonly LiveStackService _liveStack;
+    private readonly Phd2Service _phd2;
 
-    public CameraController(NinaStateService state, RemoteEventBus eventBus, CameraSelectionService cameraSelection, EquipmentSelectionService equipment, IndiDiscoveryService indi, CaptureStore captures, CameraStreamService stream, FlatWizardService flatWizard, CalibrationBatchService calibration, CalibrationLibrary library, LiveStackService liveStack)
+    public CameraController(NinaStateService state, RemoteEventBus eventBus, CameraSelectionService cameraSelection, EquipmentSelectionService equipment, IndiDiscoveryService indi, CaptureStore captures, CameraStreamService stream, FlatWizardService flatWizard, CalibrationBatchService calibration, CalibrationLibrary library, LiveStackService liveStack, Phd2Service phd2)
     {
         _state = state;
         _eventBus = eventBus;
@@ -40,6 +41,7 @@ public class CameraController : ControllerBase
         _calibration = calibration;
         _library = library;
         _liveStack = liveStack;
+        _phd2 = phd2;
     }
 
     [HttpGet("info")]
@@ -223,6 +225,22 @@ public class CameraController : ControllerBase
         // resumes with fresh frames as soon as the driver releases the
         // sensor. Best of both worlds without the impossible "physically
         // simultaneous capture + stream" requirement.
+        // Pre-capture dither — only when explicitly requested (sequencer
+        // sets it for non-first Lights), only when PHD2 is actively
+        // Guiding (otherwise the dither command no-ops or errors), and
+        // only on Light frames. Dither itself blocks until PHD2 settles
+        // so the next exposure starts on a clean star — that's the
+        // whole point. Failures are non-fatal: a missed dither just
+        // means slight pattern noise on stacked output, which is much
+        // less bad than failing the capture.
+        if (request.DitherPixels > 0
+            && string.Equals(request.ImageType ?? "Light", "Light", StringComparison.OrdinalIgnoreCase)
+            && _phd2.CurrentAppState == "Guiding")
+        {
+            try { await _phd2.DitherAsync(request.DitherPixels, HttpContext.RequestAborted); }
+            catch (Exception ex) { _state.NotifyStateChanged("dither", new { failed = true, message = ex.Message }); }
+        }
+
         bool resumeStreamAfter = _stream.IsRunning;
         if (resumeStreamAfter)
         {
@@ -522,21 +540,31 @@ public class CameraController : ControllerBase
     }
 
     [HttpGet("stream/status")]
-    public IActionResult StreamStatus()
+    public IActionResult StreamStatus() => Ok(new
     {
-        return Ok(new
-        {
-            running = _stream.IsRunning,
-            clientCount = _stream.ClientCount,
-            exposureSeconds = _stream.ExposureSeconds,
-            maxFps = _stream.MaxFps,
-            lastFps = _stream.LastFps
-        });
-    }
+        running = _stream.IsRunning,
+        clientCount = _stream.ClientCount,
+        exposureSeconds = _stream.ExposureSeconds,
+        maxFps = _stream.MaxFps,
+        lastFps = _stream.LastFps,
+        // lastFrameAgeMs grows when the driver stops delivering frames or
+        // the server can't keep up. Surfaces real staleness so the iOS HUD
+        // can show "STALE" when the camera is wedged instead of a fake fps.
+        lastFrameAgeMs = _stream.LastFrameAgeMs,
+        droppedFrames = _stream.DroppedFrames
+    });
 
     [HttpPost("stream/start")]
     public async Task<IActionResult> StreamStart([FromBody] StreamConfigRequest? request)
     {
+        // Streaming and still capture both drive CCD1. If a still is mid-exposure
+        // and we flip CCD_VIDEO_STREAM=ON, the driver either rejects with BUSY or
+        // tears the encoder mode and the capture BLOB never arrives cleanly. Refuse
+        // up front so the client gets an actionable error instead of a wedge.
+        if (_state.IsCaptureInFlight)
+        {
+            return StatusCode(409, new { success = false, message = "Capture in flight; cannot start stream" });
+        }
         var exp = request?.ExposureSeconds ?? _stream.ExposureSeconds;
         var fps = request?.MaxFps ?? _stream.MaxFps;
         _stream.Configure(exp, fps, request?.BinX, request?.BinY, request?.Gain,

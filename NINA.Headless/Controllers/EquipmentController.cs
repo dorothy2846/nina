@@ -22,6 +22,7 @@ public class EquipmentController : ControllerBase
     private readonly IndiDiscoveryService _indi;
     private readonly IndiServerManager _indiServer;
     private readonly Phd2Service _phd2;
+    private readonly IndiDriverWatchdog _watchdog;
 
     public EquipmentController(
         NinaStateService state,
@@ -36,7 +37,8 @@ public class EquipmentController : ControllerBase
         EquipmentSelectionService equipment,
         IndiDiscoveryService indi,
         IndiServerManager indiServer,
-        Phd2Service phd2)
+        Phd2Service phd2,
+        IndiDriverWatchdog watchdog)
     {
         _state = state;
         _camera = camera;
@@ -51,6 +53,24 @@ public class EquipmentController : ControllerBase
         _indi = indi;
         _indiServer = indiServer;
         _phd2 = phd2;
+        _watchdog = watchdog;
+    }
+
+    /// <summary>Diagnostics: recent driver-hang history per device. Lets
+    /// the iOS app render a "hardware health" summary so the user can
+    /// inspect frequency / pattern of failures before a long capture.</summary>
+    [HttpGet("driverHealth")]
+    public IActionResult DriverHealth()
+    {
+        var now = DateTime.UtcNow;
+        var devices = _watchdog.RecentHangs.Select(kv => new
+        {
+            key = kv.Key,
+            count = kv.Value.Count,
+            lastHangAt = kv.Value.Count > 0 ? (DateTime?)kv.Value[^1] : null,
+            ageSecondsSinceLast = kv.Value.Count > 0 ? (int)(now - kv.Value[^1]).TotalSeconds : -1,
+        }).ToArray();
+        return Ok(new { generatedAt = now, devices });
     }
 
     private static object[] AsList(IEnumerable<EquipmentDescriptor> devs)

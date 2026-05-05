@@ -20,7 +20,8 @@ public static class FitsToJpegStream
 {
     public static byte[] Encode(byte[] fitsBytes, int targetMaxWidth = 1024, int jpegQuality = 70)
     {
-        var (width, height, bitpix, dataOffset) = FitsReader.ParseHeader(fitsBytes);
+        var hdr = FitsReader.ParseHeader(fitsBytes);
+        var width = hdr.width; var height = hdr.height; var bitpix = hdr.bitpix; var dataOffset = hdr.dataOffset;
         if (bitpix != 16) throw new NotSupportedException($"Streaming encoder expects BITPIX=16, got {bitpix}");
 
         // Downsample factor: smallest integer that brings width <= targetMaxWidth.

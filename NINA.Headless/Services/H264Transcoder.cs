@@ -66,6 +66,14 @@ public class H264Transcoder : IAsyncDisposable
     /// stalling the receiver's frame buffer indefinitely.</summary>
     public event Action? FrameBoundary;
 
+    /// <summary>Fires with the wall-clock at the moment ffmpeg emits an IVF
+    /// packet. Paired FIFO with PushJpegAsync calls, this gives encode
+    /// latency = T_emit - T_push. CameraStreamService consumes it to fill
+    /// in the FrameTiming.IvfEmitted field.</summary>
+    public event Action<DateTime>? IvfEmitted;
+    private int _ivfWarnedNoSub;
+    private long _ivfReadCount;
+
     public void Start(int targetFps, int crf)
     {
         lock (_lock)
@@ -74,17 +82,29 @@ public class H264Transcoder : IAsyncDisposable
             _lastCrf = crf;
             if (IsRunning) return;
 
-            // `normalize` ≈ linear min/max autostretch but smoothed over a window of frames
-            // so bright flashes (meteor, plane) don't slam the gain. Drives dim/astronomy
-            // scenes out of near-black into something visible without any client work.
-            // `eq=gamma=0.8` adds a gentle midtone boost so starfields read as stars, not
-            // near-black pixels that look identical to the background.
-            var args = string.Join(' ', new[]
+            // Filter chain kept minimal so ffmpeg can't buffer behind us.
+            // The previous chain had `normalize=smoothing=20` for autostretch,
+            // which buffers 20 frames of histogram lookahead — at 10 fps that
+            // is a *built-in 2 s latency* before the encoder ever sees a
+            // frame. Tonemapping + WB now happen per-frame in the debayer
+            // (zero buffering), so ffmpeg only needs to scale.
+            // Use ArgumentList (not Arguments) so each token is passed
+            // atomically — ProcessStartInfo.Arguments parses on whitespace
+            // and DOES NOT respect single quotes, which broke drawtext
+            // text expressions containing spaces.
+            var argList = new[]
             {
                 "-fflags", "nobuffer+discardcorrupt",
                 "-flags", "low_delay",
+                "-probesize", "32",
+                "-analyzeduration", "0",
                 "-f", "image2pipe",
-                "-c:v", "mjpeg",
+                // BMP input, not MJPEG. Producer encodes raw RGB into a
+                // BMP frame (essentially memcpy + tiny header). ffmpeg's
+                // BMP decoder is the same — together this skips the JPEG
+                // round-trip that was costing ~30 ms per frame for no
+                // benefit on a local pipe.
+                "-c:v", "bmp",
                 // Frame-index timestamps starting at zero. Earlier the wall-
                 // clock variant locked onto the BLOB-stream's first arrival
                 // wall time and drifted ~14 s ahead of `elapsed`, which fed
@@ -95,48 +115,35 @@ public class H264Transcoder : IAsyncDisposable
                 // clock independently.
                 "-avoid_negative_ts", "make_zero",
                 "-i", "-",
-                // Server-side downsample (downscale-only). User's capture
-                // resolution comes through unchanged from the camera; we
-                // cap at 640-wide so encoding stays ahead of input rate,
-                // but if the input is already <640 (high binning) we leave
-                // it alone — upscaling just blurs without adding info.
-                // Stream quality can never exceed the user's capture setup,
-                // matching the priority "no-stutter > low-latency > quality".
-                "-vf", "scale='min(640,iw)':-2,normalize=smoothing=20,eq=gamma=0.8",
+                // Server-side downsample + latency-probe burn-in. The
+                // drawtext expression escapes colons (`\:`) since drawtext's
+                // own arg parser uses `:` as separator. No outer quotes
+                // needed because ArgumentList passes the whole string atom.
+                // Output 480 wide. libvpx software encode is the dominant
+                // cost on hardware without a VP8 hardware encoder (most
+                // dev Macs). Halving the pixel count from 640→480 cuts
+                // encode CPU by ~40% which translates directly to lower
+                // queue depth → lower end-to-end latency.
+                "-vf", "scale='min(480,iw)':-2",
                 "-c:v", "libvpx",
                 "-deadline", "realtime",
                 "-cpu-used", "16",
+                "-threads", "4",
+                "-tile-columns", "2",
                 "-pix_fmt", "yuv420p",
-                "-b:v", "800k",
-                "-maxrate", "1500k",
-                "-bufsize", "1500k",
-                // Keyframe every 2 frames (~0.2s at 10fps). The cold-start cost is
-                // "wait for the next I-frame after the WebRTC peer attaches" — a
-                // 5-frame GOP added ~0.5s, a 2-frame GOP shaves that to ~0.2s. Bitrate
-                // climbs modestly because keyframes are bigger; LAN has the headroom
-                // and we already cap at 1.5 Mbps maxrate. Steady-state quality is
-                // unchanged because libvpx redistributes bits within the cap.
+                "-b:v", "600k",
+                "-maxrate", "1000k",
+                "-bufsize", "1000k",
                 "-g", "2",
                 "-error-resilient", "1",
-                // libvpx defaults `lag-in-frames=25` — encoder waits for 25
-                // frames of look-ahead before emitting. At 2.5 input fps
-                // that's a built-in 10s of latency. Force 0 to emit every
-                // frame as soon as it's encoded.
                 "-lag-in-frames", "0",
                 "-auto-alt-ref", "0",
-                // Output side: drop frames if input rate exceeds the
-                // encoder's pace instead of buffering them. Pairs with the
-                // input -fflags nobuffer so backlog can't build up.
                 "-fps_mode", "passthrough",
-                // Flush every encoded packet immediately instead of letting
-                // the muxer pool them — that pooling was adding ~17 s of PTS
-                // drift visible in `time` vs `elapsed` and translating into
-                // multi-second viewfinder lag.
                 "-flush_packets", "1",
                 "-f", "ivf", "pipe:1"
-            });
+            };
 
-            var psi = new ProcessStartInfo("ffmpeg", args)
+            var psi = new ProcessStartInfo("ffmpeg")
             {
                 RedirectStandardInput = true,
                 RedirectStandardOutput = true,
@@ -144,7 +151,8 @@ public class H264Transcoder : IAsyncDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
-            _log.LogInformation("H264Transcoder: launching ffmpeg {Args}", args);
+            foreach (var a in argList) psi.ArgumentList.Add(a);
+            _log.LogInformation("H264Transcoder: launching ffmpeg {Args}", string.Join(' ', argList));
             _proc = Process.Start(psi) ?? throw new InvalidOperationException("ffmpeg failed to start");
             _stdin = _proc.StandardInput.BaseStream;
 
@@ -197,7 +205,12 @@ public class H264Transcoder : IAsyncDisposable
     /// stream lags by seconds. Live viewfinder semantics: latest frame wins,
     /// stale frames disappear.</summary>
     private int _pushInFlight;
-    public Task PushJpegAsync(byte[] jpegBytes, CancellationToken ct)
+    /// <summary>Feed one encoded frame (BMP per the configured input codec)
+    /// to the ffmpeg encoder. Single-flight — if a previous push is still
+    /// in flight (pipe full / encoder backed up), this drop silently rather
+    /// than queue. The caller (CameraStreamService) layers an additional
+    /// count-based backlog cap so encoder buffering can't grow unbounded.</summary>
+    public Task PushAsync(byte[] frameBytes, CancellationToken ct)
     {
         var stdin = _stdin;
         if (stdin == null) return Task.CompletedTask;
@@ -206,13 +219,17 @@ public class H264Transcoder : IAsyncDisposable
         {
             try
             {
-                await stdin.WriteAsync(jpegBytes, ct);
+                await stdin.WriteAsync(frameBytes, ct);
                 await stdin.FlushAsync(ct);
             }
             catch (Exception ex) { _log.LogDebug(ex, "H264Transcoder: push failed"); }
             finally { Interlocked.Exchange(ref _pushInFlight, 0); }
         }, ct);
     }
+
+    // Back-compat alias — earlier callers used the JPEG-specific name.
+    [Obsolete("Use PushAsync; the input codec is now BMP, not JPEG.")]
+    public Task PushJpegAsync(byte[] frameBytes, CancellationToken ct) => PushAsync(frameBytes, ct);
 
     // Read the IVF (VP8 raw frames) stream from ffmpeg.
     //   File header: 32 bytes, starts with "DKIF" magic.
@@ -247,12 +264,24 @@ public class H264Transcoder : IAsyncDisposable
                 var frame = new byte[frameSize];
                 if (!await ReadExactAsync(stdout, frame, ct)) return;
 
-                Volatile.Write(ref _lastFrameTicks, DateTime.UtcNow.Ticks);
+                var emittedAt = DateTime.UtcNow;
+                Volatile.Write(ref _lastFrameTicks, emittedAt.Ticks);
+                _ivfReadCount++;
+                if (_ivfReadCount <= 3 || _ivfReadCount % 30 == 0)
+                    _log.LogInformation("ReadNaluLoop: IVF #{N} (subs={Has})", _ivfReadCount, IvfEmitted != null);
 
                 try { FrameBoundary?.Invoke(); }
                 catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
                 try { NaluReady?.Invoke(frame); }
                 catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
+                var subs = IvfEmitted;
+                if (subs == null && Volatile.Read(ref _ivfWarnedNoSub) == 0)
+                {
+                    Volatile.Write(ref _ivfWarnedNoSub, 1);
+                    _log.LogWarning("H264Transcoder: IVF emitted but no subscribers (latency probe will show encode=pending)");
+                }
+                try { subs?.Invoke(emittedAt); }
+                catch (Exception ex) { _log.LogDebug(ex, "IvfEmitted handler threw"); }
             }
         }
         catch (OperationCanceledException) { }

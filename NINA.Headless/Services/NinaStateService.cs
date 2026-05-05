@@ -1,12 +1,22 @@
 using NINA.Core.Interfaces;
 using NINA.Equipment.Equipment.MyCamera;
+using NINA.Equipment.Equipment.MyDome;
+using NINA.Equipment.Equipment.MyFilterWheel;
+using NINA.Equipment.Equipment.MyFlatDevice;
+using NINA.Equipment.Equipment.MyFocuser;
 using NINA.Equipment.Equipment.MyGuider;
+using NINA.Equipment.Equipment.MyRotator;
+using NINA.Equipment.Equipment.MySafetyMonitor;
 using NINA.Equipment.Equipment.MyTelescope;
+using NINA.Equipment.Equipment.MyWeatherData;
 using NINA.Equipment.Interfaces.Mediator;
 
 namespace NINA.Headless.Services;
 
-public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderConsumer
+public class NinaStateService :
+    ICameraConsumer, ITelescopeConsumer, IGuiderConsumer, IFocuserConsumer,
+    IFilterWheelConsumer, IRotatorConsumer, IDomeConsumer, IFlatDeviceConsumer,
+    IWeatherDataConsumer, ISafetyMonitorConsumer
 {
     private readonly object _guideLock = new();
     private DateTime? _exposureStartTimeUtc;
@@ -15,7 +25,14 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
     public NinaStateService(
         ICameraMediator cameraMediator,
         ITelescopeMediator telescopeMediator,
-        IGuiderMediator guiderMediator)
+        IGuiderMediator guiderMediator,
+        IFocuserMediator focuserMediator,
+        IFilterWheelMediator filterWheelMediator,
+        IRotatorMediator rotatorMediator,
+        IDomeMediator domeMediator,
+        IFlatDeviceMediator flatMediator,
+        IWeatherDataMediator weatherMediator,
+        ISafetyMonitorMediator safetyMediator)
     {
         CameraMediator = cameraMediator;
         TelescopeMediator = telescopeMediator;
@@ -25,10 +42,24 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
         TelescopeMediator.RegisterConsumer(this);
         GuiderMediator.RegisterConsumer(this);
         GuiderMediator.GuideEvent += OnGuideEvent;
+        focuserMediator.RegisterConsumer(this);
+        filterWheelMediator.RegisterConsumer(this);
+        rotatorMediator.RegisterConsumer(this);
+        domeMediator.RegisterConsumer(this);
+        flatMediator.RegisterConsumer(this);
+        weatherMediator.RegisterConsumer(this);
+        safetyMediator.RegisterConsumer(this);
 
         CameraInfo = CameraMediator.GetInfo();
         TelescopeInfo = TelescopeMediator.GetInfo();
         GuiderInfo = GuiderMediator.GetInfo();
+        FocuserInfo = focuserMediator.GetInfo();
+        FilterWheelInfo = filterWheelMediator.GetInfo();
+        RotatorInfo = rotatorMediator.GetInfo();
+        DomeInfo = domeMediator.GetInfo();
+        FlatDeviceInfo = flatMediator.GetInfo();
+        WeatherDataInfo = weatherMediator.GetInfo();
+        SafetyMonitorInfo = safetyMediator.GetInfo();
     }
 
     public CameraInfo? CameraInfo { get; private set; }
@@ -36,6 +67,14 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
     public TelescopeInfo? TelescopeInfo { get; private set; }
 
     public GuiderInfo? GuiderInfo { get; private set; }
+
+    public FocuserInfo? FocuserInfo { get; private set; }
+    public FilterWheelInfo? FilterWheelInfo { get; private set; }
+    public RotatorInfo? RotatorInfo { get; private set; }
+    public DomeInfo? DomeInfo { get; private set; }
+    public FlatDeviceInfo? FlatDeviceInfo { get; private set; }
+    public WeatherDataInfo? WeatherDataInfo { get; private set; }
+    public SafetyMonitorInfo? SafetyMonitorInfo { get; private set; }
 
     public ICameraMediator CameraMediator { get; }
 
@@ -138,6 +177,8 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
         _exposureDurationSeconds = null;
     }
 
+    public bool IsCaptureInFlight => _exposureStartTimeUtc.HasValue;
+
     public object BuildTelescopeStatus()
     {
         var info = TelescopeInfo;
@@ -178,8 +219,55 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
     {
         camera = BuildCameraStatus(),
         telescope = BuildTelescopeStatus(),
-        guider = BuildGuiderStatus()
+        guider = BuildGuiderStatus(),
+        focuser = BuildFocuserStatus(),
+        filterWheel = BuildFilterWheelStatus(),
+        rotator = BuildRotatorStatus(),
+        dome = BuildDomeStatus(),
+        flatDevice = BuildFlatDeviceStatus(),
+        weather = BuildWeatherStatus(),
+        safetyMonitor = BuildSafetyMonitorStatus()
     };
+
+    public object BuildFocuserStatus() => FocuserInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = FocuserInfo.Connected, name = FocuserInfo.Name,
+                position = FocuserInfo.Position, temperature = FocuserInfo.Temperature,
+                isMoving = FocuserInfo.IsMoving, stepSize = FocuserInfo.StepSize };
+
+    public object BuildFilterWheelStatus() => FilterWheelInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = FilterWheelInfo.Connected, name = FilterWheelInfo.Name,
+                isMoving = FilterWheelInfo.IsMoving };
+
+    public object BuildRotatorStatus() => RotatorInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = RotatorInfo.Connected, name = RotatorInfo.Name,
+                position = RotatorInfo.Position, mechanicalPosition = RotatorInfo.MechanicalPosition,
+                isMoving = RotatorInfo.IsMoving };
+
+    public object BuildDomeStatus() => DomeInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = DomeInfo.Connected, name = DomeInfo.Name,
+                azimuth = DomeInfo.Azimuth, slewing = DomeInfo.Slewing };
+
+    public object BuildFlatDeviceStatus() => FlatDeviceInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = FlatDeviceInfo.Connected, name = FlatDeviceInfo.Name,
+                lightOn = FlatDeviceInfo.LightOn, brightness = FlatDeviceInfo.Brightness };
+
+    public object BuildWeatherStatus() => WeatherDataInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = WeatherDataInfo.Connected, name = WeatherDataInfo.Name,
+                temperature = WeatherDataInfo.Temperature, humidity = WeatherDataInfo.Humidity,
+                pressure = WeatherDataInfo.Pressure, dewPoint = WeatherDataInfo.DewPoint,
+                windSpeed = WeatherDataInfo.WindSpeed, cloudCover = WeatherDataInfo.CloudCover,
+                skyTemperature = WeatherDataInfo.SkyTemperature };
+
+    public object BuildSafetyMonitorStatus() => SafetyMonitorInfo == null
+        ? new { connected = false as bool?, name = "Not connected" }
+        : new { connected = SafetyMonitorInfo.Connected, name = SafetyMonitorInfo.Name,
+                isSafe = SafetyMonitorInfo.IsSafe };
 
     void IDeviceConsumer<CameraInfo>.UpdateDeviceInfo(CameraInfo deviceInfo)
     {
@@ -213,6 +301,51 @@ public class NinaStateService : ICameraConsumer, ITelescopeConsumer, IGuiderCons
     {
         GuiderInfo = deviceInfo;
         NotifyStateChanged("guider", BuildGuiderStatus());
+    }
+
+    void IDeviceConsumer<FocuserInfo>.UpdateDeviceInfo(FocuserInfo deviceInfo)
+    {
+        FocuserInfo = deviceInfo;
+        NotifyStateChanged("focuser", BuildFocuserStatus());
+    }
+    // IFocuserConsumer extras — autofocus orchestration lives in
+    // FocuserOrchestrator on the headless server, not here. State service
+    // just reflects the device-info channel.
+    public void UpdateEndAutoFocusRun(AutoFocusInfo info) { }
+    public void UpdateUserFocused(FocuserInfo info)
+    {
+        FocuserInfo = info;
+        NotifyStateChanged("focuser", BuildFocuserStatus());
+    }
+    void IDeviceConsumer<FilterWheelInfo>.UpdateDeviceInfo(FilterWheelInfo deviceInfo)
+    {
+        FilterWheelInfo = deviceInfo;
+        NotifyStateChanged("filterWheel", BuildFilterWheelStatus());
+    }
+    void IDeviceConsumer<RotatorInfo>.UpdateDeviceInfo(RotatorInfo deviceInfo)
+    {
+        RotatorInfo = deviceInfo;
+        NotifyStateChanged("rotator", BuildRotatorStatus());
+    }
+    void IDeviceConsumer<DomeInfo>.UpdateDeviceInfo(DomeInfo deviceInfo)
+    {
+        DomeInfo = deviceInfo;
+        NotifyStateChanged("dome", BuildDomeStatus());
+    }
+    void IDeviceConsumer<FlatDeviceInfo>.UpdateDeviceInfo(FlatDeviceInfo deviceInfo)
+    {
+        FlatDeviceInfo = deviceInfo;
+        NotifyStateChanged("flatDevice", BuildFlatDeviceStatus());
+    }
+    void IDeviceConsumer<WeatherDataInfo>.UpdateDeviceInfo(WeatherDataInfo deviceInfo)
+    {
+        WeatherDataInfo = deviceInfo;
+        NotifyStateChanged("weather", BuildWeatherStatus());
+    }
+    void IDeviceConsumer<SafetyMonitorInfo>.UpdateDeviceInfo(SafetyMonitorInfo deviceInfo)
+    {
+        SafetyMonitorInfo = deviceInfo;
+        NotifyStateChanged("safetyMonitor", BuildSafetyMonitorStatus());
     }
 
     public void Dispose()

@@ -54,6 +54,15 @@ public sealed class IndiClient : IAsyncDisposable
     /// route based on the device+property+element names.</summary>
     public event Action<string, string, string, byte[], string?>? BlobReceived;
 
+    /// <summary>Fires when the read loop ends — indiserver closed the socket,
+    /// the network dropped, or a fatal parse error. The connection is dead at
+    /// this point; whoever owns the IndiClient should reconnect or surface the
+    /// outage to the user. The (reason) string is a short diagnostic for logs.
+    /// Without this event the previous behaviour was: read loop exits silently,
+    /// next API call returns "Not connected", and there's no signal anywhere
+    /// that we should reconnect.</summary>
+    public event Action<string>? Disconnected;
+
     public bool IsConnected => _tcp?.Connected == true;
 
     public IReadOnlyList<IndiDevice> Devices
@@ -178,13 +187,19 @@ public sealed class IndiClient : IAsyncDisposable
         if (_stream == null) return;
         var buffer = new byte[65536];
         var pending = new StringBuilder();
+        string exitReason = "read loop ended";
 
         try
         {
             while (!ct.IsCancellationRequested)
             {
                 var n = await _stream.ReadAsync(buffer, ct);
-                if (n == 0) { _log.LogWarning("INDI: server closed connection"); break; }
+                if (n == 0)
+                {
+                    exitReason = "server closed connection";
+                    _log.LogWarning("INDI: {Reason}", exitReason);
+                    break;
+                }
 
                 var chunk = Encoding.UTF8.GetString(buffer, 0, n);
                 pending.Append(chunk);
@@ -203,8 +218,24 @@ public sealed class IndiClient : IAsyncDisposable
                 }
             }
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex) { _log.LogWarning(ex, "INDI: read loop error"); }
+        catch (OperationCanceledException) { exitReason = "cancelled"; }
+        catch (Exception ex)
+        {
+            exitReason = ex.GetType().Name + ": " + ex.Message;
+            _log.LogWarning(ex, "INDI: read loop error");
+        }
+        finally
+        {
+            // The connection is no longer usable. Clear the TCP handle so
+            // IsConnected reads false; any subsequent SendAsync will throw,
+            // and the connection-monitor (subscriber to Disconnected) will
+            // schedule a reconnect.
+            try { _tcp?.Dispose(); } catch { }
+            _tcp = null;
+            _stream = null;
+            try { Disconnected?.Invoke(exitReason); }
+            catch (Exception ex) { _log.LogWarning(ex, "INDI: Disconnected handler threw"); }
+        }
     }
 
     /// <summary>Pulls one complete top-level XML element off the front of sb, if present.</summary>
@@ -387,6 +418,7 @@ public sealed class IndiClient : IAsyncDisposable
         prop.State = ParseState((string?)el.Attribute("state"));
         prop.Perm = ParsePerm((string?)el.Attribute("perm"));
         prop.Rule = ParseRule((string?)el.Attribute("rule"));
+        prop.LastUpdated = DateTime.UtcNow;
 
         foreach (var child in el.Elements())
         {
@@ -425,6 +457,7 @@ public sealed class IndiClient : IAsyncDisposable
         if (!device.Properties.TryGetValue(propName, out var prop)) return;
 
         prop.State = ParseState((string?)el.Attribute("state"));
+        prop.LastUpdated = DateTime.UtcNow;
 
         foreach (var child in el.Elements())
         {

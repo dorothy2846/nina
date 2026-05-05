@@ -38,6 +38,12 @@ builder.Services.AddSingleton<DomeMediator>();
 builder.Services.AddSingleton<IDomeMediator>(sp => sp.GetRequiredService<DomeMediator>());
 builder.Services.AddSingleton<SafetyMonitorMediator>();
 builder.Services.AddSingleton<ISafetyMonitorMediator>(sp => sp.GetRequiredService<SafetyMonitorMediator>());
+builder.Services.AddSingleton<FlatDeviceMediator>();
+builder.Services.AddSingleton<IFlatDeviceMediator>(sp => sp.GetRequiredService<FlatDeviceMediator>());
+builder.Services.AddSingleton<WeatherDataMediator>();
+builder.Services.AddSingleton<IWeatherDataMediator>(sp => sp.GetRequiredService<WeatherDataMediator>());
+builder.Services.AddSingleton<SwitchMediator>();
+builder.Services.AddSingleton<ISwitchMediator>(sp => sp.GetRequiredService<SwitchMediator>());
 builder.Services.AddSingleton<NinaStateService>();
 builder.Services.AddSingleton<OneShotAiService>();
 builder.Services.AddSingleton<SequencerService>();
@@ -78,6 +84,22 @@ builder.Services.AddSingleton<IndiServerManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiServerManager>());
 builder.Services.AddSingleton<IndiDiscoveryService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiDiscoveryService>());
+// Bridges INDI device state into NINA mediators so every IDeviceConsumer
+// (NinaStateService etc.) sees connect/disconnect/status updates without
+// each having to know about the INDI layer directly.
+builder.Services.AddSingleton<NINA.Headless.Services.IndiToMediatorBridge>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.IndiToMediatorBridge>());
+// Detects "alive but unresponsive" drivers (CCD_EXPOSURE wedged BUSY,
+// mount/focuser stuck Busy) that the process-CPU watchdog can't see.
+builder.Services.AddSingleton<NINA.Headless.Services.IndiDriverWatchdog>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.IndiDriverWatchdog>());
+// Reacts to SafetyMonitor unsafe transitions — broadcast critical event
+// and abort active capture so the sequencer can re-evaluate.
+builder.Services.AddHostedService<NINA.Headless.Services.SafetyResponseService>();
+// Keeps PHD2 connection alive — auto-reconnects after process crash or
+// network blip so a sequence doesn't lose guiding silently.
+builder.Services.AddSingleton<NINA.Headless.Services.Phd2Watchdog>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.Phd2Watchdog>());
 builder.Services.AddSingleton<CaptureStore>();
 builder.Services.AddSingleton<H264Transcoder>();
 builder.Services.AddSingleton<CameraStreamService>();

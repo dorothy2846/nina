@@ -28,7 +28,7 @@ public class SimulatorService : BackgroundService
     };
     private readonly TelescopeInfo _telescopeInfo;
     private readonly GuiderInfo _guiderInfo;
-    private readonly FilterWheelInfo _filterWheelInfo;
+    private readonly SimulatedFilterWheelInfo _filterWheelInfo;
     private readonly DomeInfo _domeInfo;
 
     private double _focuserPosition = 5300.0;
@@ -97,7 +97,7 @@ public class SimulatorService : BackgroundService
             RMSError = new RMSError(0.42, 0.36, 0.92, 0.84, 0.55, 1.5)
         };
 
-        _filterWheelInfo = new FilterWheelInfo
+        _filterWheelInfo = new SimulatedFilterWheelInfo
         {
             Connected = true,
             Name = "Simulator Filter Wheel",
@@ -264,7 +264,10 @@ public class SimulatorService : BackgroundService
     }
 }
 
-public class FilterWheelInfo
+/// Simulator-only filter-wheel snapshot. Renamed from `FilterWheelInfo`
+/// to avoid conflicting with the NINA.Equipment type of the same simple
+/// name (the bridge needs to broadcast NINA's typed FilterWheelInfo).
+public class SimulatedFilterWheelInfo
 {
     public bool Connected { get; set; } = true;
     public string Name { get; set; } = "Simulator Filter Wheel";

@@ -324,7 +324,7 @@ public class TelescopeController : ControllerBase
         // TELESCOPE_SLEW_RATE OneOfMany switch caps at whatever the manufacturer exposes
         // (AM5 = 1–10); anything higher clamps to the max element.
         double? multiplier = request.Rate >= 1.0 ? request.Rate : null;
-        await _indi.TelescopeMoveAsync(selected.UniqueId, dirName, multiplier, HttpContext.RequestAborted);
+        await _indi.TelescopeMoveAsync(selected.UniqueId, dirName, multiplier, HttpContext.RequestAborted, request.RateName, request.SiderealRate);
 
         // If a duration is supplied (tap-to-nudge), sleep then stop. Otherwise keep moving until an
         // explicit /stopMove call.
@@ -358,6 +358,50 @@ public class TelescopeController : ControllerBase
             return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
         await _indi.TelescopeFindHomeAsync(selected.UniqueId, HttpContext.RequestAborted);
         return Ok(new { success = true, message = "Home requested" });
+    }
+
+    /// <summary>Set the mount's TELESCOPE_SLEW_RATE switch without sending
+    /// any motion command. Lets the iOS chip strip preview a rate so the
+    /// highlighted chip actually reflects the driver's selection.</summary>
+    [HttpPost("setSlewRate")]
+    public async Task<IActionResult> SetSlewRate([FromBody] SetSlewRateRequest request)
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        if (string.IsNullOrEmpty(request.RateName) && !request.SiderealRate.HasValue)
+            return BadRequest(new { success = false, message = "rateName or siderealRate required" });
+        await _indi.TelescopeSetSlewRateAsync(selected.UniqueId, request.RateName, request.SiderealRate, HttpContext.RequestAborted);
+        return Ok(new { success = true, rateName = request.RateName, siderealRate = request.SiderealRate });
+    }
+
+    public record SetSlewRateRequest(string? RateName, double? SiderealRate);
+
+    /// <summary>Send a pulse-guide (timed motion) command to the mount.
+    /// Foundation for an in-server guider — used by iOS as a quick
+    /// "test ST4 port" tool and by future guiding logic. Direction is
+    /// N/S/E/W; durationMs typically 50–2000 ms per pulse.</summary>
+    [HttpPost("pulseGuide")]
+    public async Task<IActionResult> PulseGuide([FromBody] PulseGuideRequest request)
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return StatusCode(503, new { success = false, message = "Telescope not connected" });
+        var dur = Math.Clamp(request.DurationMs, 1, 5000);
+        await _indi.TelescopePulseGuideAsync(selected.UniqueId, request.Direction, dur, HttpContext.RequestAborted);
+        return Ok(new { success = true, direction = request.Direction, durationMs = dur });
+    }
+
+    public record PulseGuideRequest(string Direction, int DurationMs);
+
+    [HttpGet("guideRate")]
+    public IActionResult GetGuideRate()
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Telescope);
+        if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
+            return Ok(new { connected = false });
+        var (ra, dec) = _indi.TryGetGuideRate(selected.UniqueId);
+        return Ok(new { connected = true, raRate = ra, decRate = dec });
     }
 
     [HttpGet("axisRates")]
