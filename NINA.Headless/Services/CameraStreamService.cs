@@ -252,6 +252,22 @@ public class CameraStreamService : IAsyncDisposable
         // wrote, but lastFps and frame brightness don't change.
         if (!sensorTouched && !exposureChanged) return;
 
+        // Server-side debounce on the OFF/ON cycle. iOS already debounces
+        // its /stream/configure POSTs at 250 ms, but that's still 4 cycles
+        // per second of slider drag — PlayerOne's driver gets confused and
+        // drops the camera connection entirely after a few rapid cycles.
+        // Skip if the last cycle was less than CycleMinIntervalMs ago; the
+        // user's most recent value is already in `_exposureSeconds` /
+        // `_streamGainOverride`, so the next configure call (after the
+        // dragging stops) will pick it up.
+        var sinceLast = (DateTime.UtcNow - _lastSensorCycleAt).TotalMilliseconds;
+        if (sinceLast < CycleMinIntervalMs)
+        {
+            _log.LogDebug("CameraStream: skipping OFF/ON cycle ({Ms} ms since last)", (int)sinceLast);
+            return;
+        }
+        _lastSensorCycleAt = DateTime.UtcNow;
+
         // Driver-level only: pause sensor, swap binning + sub-frame, resume.
         // ffmpeg + WebRTC peers stay up the whole time. Keepalive loop pushes
         // the last cached JPEG so the user sees a frozen-but-not-disconnected
@@ -684,6 +700,13 @@ public class CameraStreamService : IAsyncDisposable
     /// need a warmup window of more than 3 frames before it produces
     /// output, even with -probesize 32 -analyzeduration 0.</summary>
     private const int EncoderBacklogMax = 10;
+    /// <summary>Minimum interval between sensor OFF/ON cycles (ROI / binning /
+    /// exposure changes that need a stream rearm). PlayerOne's driver
+    /// disconnects the camera after rapid cycling — observed at the iOS-
+    /// slider drag rate of 4 Hz. 800 ms gives the driver breathing room
+    /// while still feeling responsive on a single deliberate adjustment.</summary>
+    private const int CycleMinIntervalMs = 800;
+    private DateTime _lastSensorCycleAt = DateTime.MinValue;
 
     /// Single-flight in-process processing slot. The INDI client thread that
     /// raises BLOB events MUST NOT do CPU work — debayer + JPEG re-encode on
