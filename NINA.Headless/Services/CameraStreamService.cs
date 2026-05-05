@@ -244,7 +244,13 @@ public class CameraStreamService : IAsyncDisposable
             try { await _indi.SetGainAsync(device, g, ct); } catch { }
         }
 
-        if (!sensorTouched) return;
+        // Exposure-only changes also need the stream OFF/ON dance on
+        // PlayerOne (and possibly other drivers) — the value gets accepted
+        // into STREAMING_EXPOSURE_VALUE but the camera's running stream
+        // keeps the original exposure cached until the stream is rearmed.
+        // Symptom: slider moves in the UI, server confirms the property
+        // wrote, but lastFps and frame brightness don't change.
+        if (!sensorTouched && !exposureChanged) return;
 
         // Driver-level only: pause sensor, swap binning + sub-frame, resume.
         // ffmpeg + WebRTC peers stay up the whole time. Keepalive loop pushes
@@ -422,6 +428,26 @@ public class CameraStreamService : IAsyncDisposable
         {
             _log.LogWarning("CameraStream: no live-exposure property found on device {Dev}", device);
         }
+
+        // Enable INDI fast-toggle BEFORE starting the stream. PlayerOne (and
+        // some other CCD drivers) expose a CCD_FAST_TOGGLE switch — when ON
+        // the driver bypasses the per-exposure capture state machine and
+        // streams directly from the sensor, dropping its internal buffering
+        // dramatically. With this disabled the camera may queue ~5-10 frames
+        // internally even on idle USB; on a 8 fps preview that's > 600 ms of
+        // hidden latency the user can't measure from any rtc-stat. Cheap
+        // best-effort — drivers without the property silently no-op.
+        try
+        {
+            var dev = client.GetDevice(device);
+            if (dev != null && dev.Properties.ContainsKey("CCD_FAST_TOGGLE"))
+            {
+                await client.SetSwitchManyAsync(device, "CCD_FAST_TOGGLE",
+                    new[] { ("INDI_ENABLED", true), ("INDI_DISABLED", false) }, ct);
+                _log.LogInformation("CameraStream: enabled CCD_FAST_TOGGLE on {Dev}", device);
+            }
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "CameraStream: CCD_FAST_TOGGLE set failed"); }
 
         await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
             new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
@@ -620,11 +646,12 @@ public class CameraStreamService : IAsyncDisposable
     private int _framesSinceBinningCheck;
     private const int BinningRecheckEvery = 30;
     /// <summary>Max frames allowed to be in flight to the H.264 encoder
-    /// before producer-side drop kicks in. ~10 frames at 8 fps is ~1.25 s
-    /// of buffer — large enough that ffmpeg's image2pipe demuxer clears
-    /// its analyzeduration/probesize startup gate, small enough that a
-    /// slow encoder can't accumulate the multi-second backlog seen in
-    /// uncapped operation.</summary>
+    /// before producer-side drop kicks in. 10 frames at 8 fps ≈ 1.25 s
+    /// worst case but encoder normally drains far faster than it fills,
+    /// so steady-state queue depth is 1-2. Going lower (tried 3) stalled
+    /// ffmpeg's BMP demuxer at startup — image2pipe with bmp seems to
+    /// need a warmup window of more than 3 frames before it produces
+    /// output, even with -probesize 32 -analyzeduration 0.</summary>
     private const int EncoderBacklogMax = 10;
 
     /// Single-flight in-process processing slot. The INDI client thread that

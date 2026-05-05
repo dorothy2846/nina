@@ -41,14 +41,12 @@ public class WebRTCService
     private readonly object _paceLock = new();
     private byte[]? _pendingNalu;
     private System.Threading.Timer? _paceTimer;
-    /// <summary>Server-side send pace. 67 ms = 15 fps target. Higher than
-    /// the camera's ~8 fps capture rate so PaceTick fires twice per produced
-    /// frame and frames go out within ~one tick of being encoded — instead
-    /// of sitting up to a full PaceIntervalMs in the queue. Net effect is
-    /// ~30 ms shaved off the per-frame visible latency. Tick-with-no-NAL
-    /// is a no-op so this just reduces the worst-case wait without
-    /// adding any new traffic.</summary>
-    private const int PaceIntervalMs = 67;
+    /// <summary>Server-side send pace. 33 ms = 30 fps tick rate. Worst-case
+    /// wait between encode-done and send drops to one tick. Camera tops
+    /// out around 8-14 fps, so most ticks fire with no pending NAL and
+    /// are no-ops — the 30 fps tick rate just means whenever a frame IS
+    /// ready it leaves within ≤33 ms instead of waiting up to 100 ms.</summary>
+    private const int PaceIntervalMs = 33;
 
     public WebRTCService(H264Transcoder h264, CameraStreamService stream, ILogger<WebRTCService> log)
     {
