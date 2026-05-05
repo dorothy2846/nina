@@ -124,22 +124,23 @@ public class H264Transcoder : IAsyncDisposable
                 // dev Macs). Halving the pixel count from 640→480 cuts
                 // encode CPU by ~40% which translates directly to lower
                 // queue depth → lower end-to-end latency.
-                // 720 wide for noticeably sharper detail than 480 — H.264
-                // H/W encode at 720p is essentially free CPU-wise vs the
-                // libvpx 480p path we left, and the wire bandwidth fits
-                // comfortably in LAN headroom.
-                "-vf", "scale='min(720,iw)':-2",
+                // 640 wide. 720p added detail but also encode/wire time;
+                // 640 keeps the H.264 quality budget where it matters
+                // (edges, focus stars) and trims a few ms off the per-
+                // frame pipeline.
+                "-vf", "scale='min(640,iw)':-2",
                 "-c:v", "h264_videotoolbox",
                 "-realtime", "1",
                 "-allow_sw", "1",
                 "-pix_fmt", "yuv420p",
                 "-profile:v", "high",
-                // 2.5 Mbps target / 4 Mbps cap. Earlier 800k produced
-                // blocking on motion (camera shake, panning) at 480p; 2.5M
-                // at 720p restores edge detail and removes the shimmer.
-                "-b:v", "2500k",
-                "-maxrate", "4000k",
-                "-bufsize", "4000k",
+                // 1.8 Mbps / 3 Mbps cap. 2.5M at 720p was overkill for the
+                // simulator viewport and added measurable per-frame transit
+                // time; 1.8M at 640p still kills the motion-blocking the
+                // user reported but leaves more network/encode headroom.
+                "-b:v", "1800k",
+                "-maxrate", "3000k",
+                "-bufsize", "3000k",
                 // Keyframe every 20 frames ≈ 2 s at 10 fps. Smaller GOP
                 // = each P-frame sees a fresher reference = less drift,
                 // less mosquito noise on motion. Cost: more bandwidth at

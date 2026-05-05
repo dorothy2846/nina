@@ -837,7 +837,7 @@ public class CameraStreamService : IAsyncDisposable
     /// see a much smaller frame and we keep up with high-rate sensors
     /// (10 ms exposure on 1×1 binning) without dropping. Stills are
     /// untouched — they go through FitsToPng at full bilinear demosaic.
-    private const int StreamDecimate = 2;
+    private const int StreamDecimate = 4;
 
     /// Fast 2×2-block debayer + gray-world WB. We previously tried full
     /// bilinear demosaic + box-filter downsample; on a 12 MP sensor that

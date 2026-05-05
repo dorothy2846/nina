@@ -41,12 +41,14 @@ public class WebRTCService
     private readonly object _paceLock = new();
     private byte[]? _pendingNalu;
     private System.Threading.Timer? _paceTimer;
-    /// <summary>Server-side send pace. With H.264 + iOS VideoToolbox H/W
-    /// decode the receiver keeps up at much higher rates than the old SW
-    /// VP8 path (which capped around 5 fps on simulator). 100 ms = 10 fps —
-    /// comfortably above the camera's ~8 fps capture rate so PaceTick
-    /// always finds a fresh NAL and never throttles the input.</summary>
-    private const int PaceIntervalMs = 100;
+    /// <summary>Server-side send pace. 67 ms = 15 fps target. Higher than
+    /// the camera's ~8 fps capture rate so PaceTick fires twice per produced
+    /// frame and frames go out within ~one tick of being encoded — instead
+    /// of sitting up to a full PaceIntervalMs in the queue. Net effect is
+    /// ~30 ms shaved off the per-frame visible latency. Tick-with-no-NAL
+    /// is a no-op so this just reduces the worst-case wait without
+    /// adding any new traffic.</summary>
+    private const int PaceIntervalMs = 67;
 
     public WebRTCService(H264Transcoder h264, CameraStreamService stream, ILogger<WebRTCService> log)
     {
