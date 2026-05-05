@@ -41,12 +41,12 @@ public class WebRTCService
     private readonly object _paceLock = new();
     private byte[]? _pendingNalu;
     private System.Threading.Timer? _paceTimer;
-    /// <summary>Server-side send pace. 200 ms = 5 fps. Empirically the
-    /// iOS Simulator's software VP8 decoder caps at ~5-6 fps (visible as
-    /// `framesPerSecond` in WebRTC stats); sending faster than that leaks
-    /// undecoded frames into the receiver's pre-render queue and the
-    /// reported "jitter buffer wait" climbs without bound.</summary>
-    private const int PaceIntervalMs = 200;
+    /// <summary>Server-side send pace. With H.264 + iOS VideoToolbox H/W
+    /// decode the receiver keeps up at much higher rates than the old SW
+    /// VP8 path (which capped around 5 fps on simulator). 100 ms = 10 fps —
+    /// comfortably above the camera's ~8 fps capture rate so PaceTick
+    /// always finds a fresh NAL and never throttles the input.</summary>
+    private const int PaceIntervalMs = 100;
 
     public WebRTCService(H264Transcoder h264, CameraStreamService stream, ILogger<WebRTCService> log)
     {
@@ -94,54 +94,101 @@ public class WebRTCService
         MaybeLog();
     }
 
-    /// Latest-NAL-wins on the SEND side. Encoder produces faster than the
-    /// pace tick → older NAL gets replaced before it can be sent (server-
-    /// side equivalent of FreshOnlyRenderer on the client). Encoder slower
-    /// → tick fires with no NAL pending and we just don't send. Receiver
-    /// gets exactly one frame per `PaceIntervalMs`, perfectly uniform.
+    // H.264 access unit assembly. ffmpeg emits NALs one at a time via
+    // NaluReady (no start codes — already stripped by ReadNaluLoopAsync).
+    // SIPSorcery's `VideoStream.SendH264Frame(duration, pt, accessUnit)`
+    // does proper RFC 6184 packetization (Single-NAL / STAP-A / FU-A) when
+    // given a complete Annex B access unit (NALs concatenated with
+    // 4-byte start codes). The generic SendVideo() call we used before
+    // does NOT do H.264 packetization — that's why the iOS decoder
+    // rejected every frame.
+    private readonly List<byte[]> _frameNals = new();
+    private byte[]? _pendingFrame;            // serialized access unit, ready to send
+    private byte[]? _cachedSps;
+    private byte[]? _cachedPps;
+    private static readonly byte[] StartCode = { 0x00, 0x00, 0x00, 0x01 };
+
     private void OnNaluReady(byte[] nalu)
     {
-        if (_peers.IsEmpty) return;
+        if (nalu.Length < 1) return;
         Interlocked.Increment(ref _naluCount);
+        byte nalType = (byte)(nalu[0] & 0x1F);
+
+        // Cache parameter sets — re-prepended ahead of every IDR by
+        // ffmpeg's `dump_extra=freq=keyframe`, but our own copy lets a
+        // peer that joins MID-GOP get them immediately if we ever wire
+        // up an on-attach push. Don't queue these into the slice list;
+        // SendH264Frame handles them when they prefix the access unit.
+        if (nalType == 7) { _cachedSps = nalu; }
+        else if (nalType == 8) { _cachedPps = nalu; }
+
+        if (_peers.IsEmpty) return;
+
+        bool isVcl = nalType == 1 || nalType == 5;
         lock (_paceLock)
         {
-            _pendingNalu = nalu;
+            _frameNals.Add(nalu);
+            if (isVcl)
+            {
+                // Frame complete (one VCL slice per frame in baseline
+                // single-slice config). Serialise to Annex B and replace
+                // any in-flight pending frame (latest-wins).
+                _pendingFrame = AssembleAccessUnit(_frameNals);
+                _frameNals.Clear();
+            }
         }
+    }
+
+    /// Concatenate NALs with 4-byte Annex B start codes between them.
+    /// SendH264Frame parses start codes to identify NAL boundaries.
+    private static byte[] AssembleAccessUnit(List<byte[]> nals)
+    {
+        int total = 0;
+        foreach (var n in nals) total += StartCode.Length + n.Length;
+        var au = new byte[total];
+        int o = 0;
+        foreach (var n in nals)
+        {
+            Buffer.BlockCopy(StartCode, 0, au, o, StartCode.Length);
+            o += StartCode.Length;
+            Buffer.BlockCopy(n, 0, au, o, n.Length);
+            o += n.Length;
+        }
+        return au;
     }
 
     private void PaceTick()
     {
         if (_peers.IsEmpty) return;
-        byte[]? nalu;
+        byte[]? au;
         lock (_paceLock)
         {
-            nalu = _pendingNalu;
-            _pendingNalu = null;
+            au = _pendingFrame;
+            _pendingFrame = null;
         }
-        if (nalu == null) return;
+        if (au == null) return;
 
-        // Compute the RTP timestamp at SEND time, not at encoder-emit time.
-        // The receiver uses (RTP TS delta) - (arrival delta) to infer
-        // network jitter. Both deltas should match for zero perceived
-        // jitter — and the easiest way to guarantee that is to make RTP TS
-        // track our own fixed-rate send tick (so deltas are exactly the
-        // tick period, every time, regardless of when the encoder finished
-        // any particular frame).
-        var startTicks = Volatile.Read(ref _streamStartTicks);
-        if (startTicks == 0)
-        {
-            startTicks = DateTime.UtcNow.Ticks;
-            Interlocked.CompareExchange(ref _streamStartTicks, startTicks, 0);
-            startTicks = Volatile.Read(ref _streamStartTicks);
-        }
-        var elapsedTicks = DateTime.UtcNow.Ticks - startTicks;
-        var ts = (uint)(elapsedTicks * 9 / 1000); // 90 kHz
-        _rtpTimestamp = ts;
+        // SendH264Frame's `duration` argument advances the underlying RTP
+        // session's timestamp by that many 90 kHz ticks. Pace interval =
+        // 200 ms = 18 000 ticks. Using duration (relative) instead of
+        // computing absolute TS keeps RTP TS perfectly uniform regardless
+        // of when our timer actually fires (avoids drift from .NET timer
+        // jitter that earlier confused the receiver's jitter buffer).
+        const uint duration = (uint)(PaceIntervalMs * 90); // 90 kHz
+        const int payloadTypeId = 96;
 
         foreach (var kv in _peers)
         {
-            try { kv.Value.Peer.SendVideo(ts, nalu); Interlocked.Increment(ref _sendOk); }
-            catch (Exception ex) { _log.LogWarning(ex, "WebRTC: SendVideo failed for peer {Id}", kv.Key); Interlocked.Increment(ref _sendFail); }
+            try
+            {
+                kv.Value.Peer.VideoStream.SendH264Frame(duration, payloadTypeId, au);
+                Interlocked.Increment(ref _sendOk);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "WebRTC: SendH264Frame failed for peer {Id}", kv.Key);
+                Interlocked.Increment(ref _sendFail);
+            }
         }
         MaybeLog();
     }
@@ -178,11 +225,14 @@ public class WebRTCService
         var peer = new RTCPeerConnection(config);
         var id = Guid.NewGuid();
 
-        // VP8 video track. The H.264 path hit chrome decoder rejecting every
-        // assembled frame for reasons we couldn't pin to a single SDP/SPS
-        // tweak; VP8 is wire-tested in SIPSorcery and chrome accepts its
-        // packetization with no parameter-set negotiation.
-        var videoFormat = new VideoFormat(VideoCodecsEnum.VP8, 96);
+        // H.264 video track via SIPSorcery's *codec-specific* SendH264Frame
+        // path (NOT the generic SendVideo, which does not RFC 6184 packetize
+        // and was the actual cause of the previous "chrome rejected every
+        // assembled frame" symptom). High profile (640c1f) matches what the
+        // iOS offer puts on PT 96. iOS decodes H.264 in hardware via
+        // VideoToolbox even on the simulator — way faster than SW VP8.
+        var fmtp = "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640c1f";
+        var videoFormat = new VideoFormat(VideoCodecsEnum.H264, 96, 90000, fmtp);
         var videoTrack = new MediaStreamTrack(videoFormat, MediaStreamStatusEnum.SendOnly);
         peer.addTrack(videoTrack);
 

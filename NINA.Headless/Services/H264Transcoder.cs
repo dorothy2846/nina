@@ -124,23 +124,33 @@ public class H264Transcoder : IAsyncDisposable
                 // dev Macs). Halving the pixel count from 640→480 cuts
                 // encode CPU by ~40% which translates directly to lower
                 // queue depth → lower end-to-end latency.
-                "-vf", "scale='min(480,iw)':-2",
-                "-c:v", "libvpx",
-                "-deadline", "realtime",
-                "-cpu-used", "16",
-                "-threads", "4",
-                "-tile-columns", "2",
+                // 720 wide for noticeably sharper detail than 480 — H.264
+                // H/W encode at 720p is essentially free CPU-wise vs the
+                // libvpx 480p path we left, and the wire bandwidth fits
+                // comfortably in LAN headroom.
+                "-vf", "scale='min(720,iw)':-2",
+                "-c:v", "h264_videotoolbox",
+                "-realtime", "1",
+                "-allow_sw", "1",
                 "-pix_fmt", "yuv420p",
-                "-b:v", "600k",
-                "-maxrate", "1000k",
-                "-bufsize", "1000k",
-                "-g", "2",
-                "-error-resilient", "1",
-                "-lag-in-frames", "0",
-                "-auto-alt-ref", "0",
+                "-profile:v", "high",
+                // 2.5 Mbps target / 4 Mbps cap. Earlier 800k produced
+                // blocking on motion (camera shake, panning) at 480p; 2.5M
+                // at 720p restores edge detail and removes the shimmer.
+                "-b:v", "2500k",
+                "-maxrate", "4000k",
+                "-bufsize", "4000k",
+                // Keyframe every 20 frames ≈ 2 s at 10 fps. Smaller GOP
+                // = each P-frame sees a fresher reference = less drift,
+                // less mosquito noise on motion. Cost: more bandwidth at
+                // keyframes (already covered by maxrate cap).
+                "-g", "20",
+                "-bf", "0",
+                "-bsf:v", "dump_extra=freq=keyframe",
                 "-fps_mode", "passthrough",
                 "-flush_packets", "1",
-                "-f", "ivf", "pipe:1"
+                // Annex B raw NAL stream (start-code framed).
+                "-f", "h264", "pipe:1"
             };
 
             var psi = new ProcessStartInfo("ffmpeg")
@@ -231,61 +241,74 @@ public class H264Transcoder : IAsyncDisposable
     [Obsolete("Use PushAsync; the input codec is now BMP, not JPEG.")]
     public Task PushJpegAsync(byte[] frameBytes, CancellationToken ct) => PushAsync(frameBytes, ct);
 
-    // Read the IVF (VP8 raw frames) stream from ffmpeg.
-    //   File header: 32 bytes, starts with "DKIF" magic.
-    //   Per frame:   12-byte header [size:u32 LE][pts:u64 LE] + frame body.
-    // Each frame is a complete VP8 access unit; emit one FrameBoundary +
-    // NaluReady per frame (subscribers see a single self-contained payload
-    // so SIPSorcery's VP8 RTP packetizer can wrap it without parameter-set
-    // gymnastics).
+    /// Read an Annex B H.264 NAL stream from ffmpeg stdout. Annex B framing:
+    /// each NAL unit is preceded by a start code, either 3 bytes `00 00 01`
+    /// or 4 bytes `00 00 00 01`. We scan for start codes, accumulate each
+    /// NAL between them, and emit via NaluReady (consumer reassembles into
+    /// access units and hands them to SIPSorcery's H.264 packetizer).
     private async Task ReadNaluLoopAsync(Stream stdout, CancellationToken ct)
     {
+        var buf = new byte[64 * 1024];
+        var nalBuilder = new System.IO.MemoryStream();
         try
         {
-            var fileHeader = new byte[32];
-            if (!await ReadExactAsync(stdout, fileHeader, ct)) return;
-            if (!(fileHeader[0] == (byte)'D' && fileHeader[1] == (byte)'K' && fileHeader[2] == (byte)'I' && fileHeader[3] == (byte)'F'))
-            {
-                _log.LogWarning("VideoTranscoder: IVF magic missing — got {B0:X2} {B1:X2} {B2:X2} {B3:X2}",
-                    fileHeader[0], fileHeader[1], fileHeader[2], fileHeader[3]);
-                return;
-            }
-
-            var frameHeader = new byte[12];
             while (!ct.IsCancellationRequested)
             {
-                if (!await ReadExactAsync(stdout, frameHeader, ct)) return;
-                int frameSize = frameHeader[0] | (frameHeader[1] << 8) | (frameHeader[2] << 16) | (frameHeader[3] << 24);
-                if (frameSize <= 0 || frameSize > 4_000_000)
-                {
-                    _log.LogWarning("VideoTranscoder: unreasonable frame size {Size}, bailing", frameSize);
-                    return;
-                }
-                var frame = new byte[frameSize];
-                if (!await ReadExactAsync(stdout, frame, ct)) return;
+                int n = await stdout.ReadAsync(buf.AsMemory(0, buf.Length), ct);
+                if (n == 0) return; // EOF — ffmpeg exited
 
-                var emittedAt = DateTime.UtcNow;
-                Volatile.Write(ref _lastFrameTicks, emittedAt.Ticks);
-                _ivfReadCount++;
-                if (_ivfReadCount <= 3 || _ivfReadCount % 30 == 0)
-                    _log.LogInformation("ReadNaluLoop: IVF #{N} (subs={Has})", _ivfReadCount, IvfEmitted != null);
-
-                try { FrameBoundary?.Invoke(); }
-                catch (Exception ex) { _log.LogDebug(ex, "FrameBoundary handler threw"); }
-                try { NaluReady?.Invoke(frame); }
-                catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
-                var subs = IvfEmitted;
-                if (subs == null && Volatile.Read(ref _ivfWarnedNoSub) == 0)
+                int i = 0;
+                while (i < n)
                 {
-                    Volatile.Write(ref _ivfWarnedNoSub, 1);
-                    _log.LogWarning("H264Transcoder: IVF emitted but no subscribers (latency probe will show encode=pending)");
+                    int sc = FindStartCode(buf, i, n, out int scLen);
+                    if (sc < 0)
+                    {
+                        nalBuilder.Write(buf, i, n - i);
+                        break;
+                    }
+                    if (sc > i) nalBuilder.Write(buf, i, sc - i);
+                    EmitAccumulatedNalu(nalBuilder);
+                    i = sc + scLen;
                 }
-                try { subs?.Invoke(emittedAt); }
-                catch (Exception ex) { _log.LogDebug(ex, "IvfEmitted handler threw"); }
             }
+            EmitAccumulatedNalu(nalBuilder);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) { _log.LogWarning(ex, "VideoTranscoder: reader loop error"); }
+    }
+
+    private static int FindStartCode(byte[] buf, int start, int end, out int scLen)
+    {
+        scLen = 0;
+        for (int j = start; j + 2 < end; j++)
+        {
+            if (buf[j] == 0 && buf[j + 1] == 0)
+            {
+                if (buf[j + 2] == 1) { scLen = 3; return j; }
+                if (buf[j + 2] == 0 && j + 3 < end && buf[j + 3] == 1) { scLen = 4; return j; }
+            }
+        }
+        return -1;
+    }
+
+    private void EmitAccumulatedNalu(System.IO.MemoryStream nalBuilder)
+    {
+        if (nalBuilder.Length == 0) return;
+        var nal = nalBuilder.ToArray();
+        nalBuilder.SetLength(0);
+
+        var emittedAt = DateTime.UtcNow;
+        Volatile.Write(ref _lastFrameTicks, emittedAt.Ticks);
+        byte nalType = (byte)(nal[0] & 0x1F);
+
+        try { NaluReady?.Invoke(nal); }
+        catch (Exception ex) { _log.LogDebug(ex, "NaluReady handler threw"); }
+        try { IvfEmitted?.Invoke(emittedAt); }
+        catch (Exception ex) { _log.LogDebug(ex, "IvfEmitted handler threw"); }
+
+        _ivfReadCount++;
+        if (_ivfReadCount <= 6 || _ivfReadCount % 60 == 0)
+            _log.LogInformation("ReadNaluLoop: NAL #{N} type={T} size={S}", _ivfReadCount, nalType, nal.Length);
     }
 
     private static async Task<bool> ReadExactAsync(Stream s, byte[] buf, CancellationToken ct)
