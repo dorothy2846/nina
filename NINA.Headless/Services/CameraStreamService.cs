@@ -65,7 +65,7 @@ public class CameraStreamService : IAsyncDisposable
     private double _roiFracCX = 0.5, _roiFracCY = 0.5;
     private (int x, int y, int w, int h)? _savedSubFrame;
     private CancellationTokenSource? _keepaliveCts;
-    private double _maxFps = 10;
+    private double _maxFps = 20;
 
     // FPS tracking — rolling 1-second window of frame arrival times.
     private readonly Queue<DateTime> _frameTimes = new();
@@ -446,8 +446,33 @@ public class CameraStreamService : IAsyncDisposable
                     new[] { ("INDI_ENABLED", true), ("INDI_DISABLED", false) }, ct);
                 _log.LogInformation("CameraStream: enabled CCD_FAST_TOGGLE on {Dev}", device);
             }
+
+            // Switch the sensor's video format to 8-bit when available.
+            // PlayerOne / ZWO / QHY default to RAW16 — twice the sensor
+            // readout time and twice the on-USB bandwidth as RAW8 for the
+            // same scene. The streaming MJPEG encoder on the camera side
+            // truncates to 8-bit anyway before compression, so RAW16 buys
+            // us nothing on the live preview path. Pick the first 8-bit
+            // element we find; the lookup is brand-agnostic so PlayerOne's
+            // POA_RAW8, ZWO's ASI_IMG_RAW8, etc. all match.
+            if (dev != null && dev.Properties.TryGetValue("CCD_VIDEO_FORMAT", out var vf))
+            {
+                string? raw8Element = vf.Elements.Values
+                    .Select(e => e.Name)
+                    .FirstOrDefault(n =>
+                        n.IndexOf("RAW8", StringComparison.OrdinalIgnoreCase) >= 0
+                        && n.IndexOf("RAW16", StringComparison.OrdinalIgnoreCase) < 0);
+                if (raw8Element != null && vf[raw8Element]?.ValueOn != true)
+                {
+                    var tuples = vf.Elements.Values
+                        .Select(e => (e.Name, e.Name == raw8Element))
+                        .ToArray();
+                    await client.SetSwitchManyAsync(device, "CCD_VIDEO_FORMAT", tuples, ct);
+                    _log.LogInformation("CameraStream: video format → {Fmt} on {Dev} (faster sensor readout vs RAW16)", raw8Element, device);
+                }
+            }
         }
-        catch (Exception ex) { _log.LogDebug(ex, "CameraStream: CCD_FAST_TOGGLE set failed"); }
+        catch (Exception ex) { _log.LogDebug(ex, "CameraStream: pre-stream tuning set failed"); }
 
         await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
             new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
