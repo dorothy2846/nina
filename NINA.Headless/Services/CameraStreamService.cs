@@ -229,7 +229,12 @@ public class CameraStreamService : IAsyncDisposable
         {
             try { await Task.Delay(ApplyDebounceMs, newCts.Token); }
             catch (OperationCanceledException) { return; }
-            try { await ApplyToDriverAsync(newCts.Token); }
+            // Pass CancellationToken.None into ApplyToDriverAsync so a follow-up
+            // configure arriving mid-cycle CAN'T cancel an in-progress STREAM
+            // OFF→delay→ON dance and leave the camera stuck with STREAM_OFF.
+            // The debounce protects the FRONT of the apply (we coalesce
+            // calls); the apply itself runs to completion atomically.
+            try { await ApplyToDriverAsync(CancellationToken.None); }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: deferred apply failed"); }
         });
         return Task.CompletedTask;
