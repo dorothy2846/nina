@@ -637,20 +637,26 @@ public class CameraStreamService : IAsyncDisposable
     /// the warning log surfaces the situation.
     private (string, string, double)? ResolveLiveExposureProperty(string deviceName)
     {
-        var dev = _indi.Client?.GetDevice(deviceName);
-        if (dev == null) return null;
-        // 1. INDI standard streaming-exposure property (ZWO, QHY, ToupTek).
-        if (dev.Properties.TryGetValue("STREAMING_EXPOSURE", out var se)
-            && se["STREAMING_EXPOSURE_VALUE"] != null)
+        // Wait up to 2 s for the driver to publish either streaming-exposure
+        // property. Same race as SetGainAsync — at stream-start right after
+        // camera connect, property dict has the keys but elements stream in
+        // separately and may arrive a beat later. Without the wait the server
+        // silently can't push initial exposure on the first stream/start of
+        // a session.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
         {
-            return ("STREAMING_EXPOSURE", "STREAMING_EXPOSURE_VALUE", 1.0);
-        }
-        // 2. PlayerOne / SVBony advanced controls — Exposure element inside
-        // CCD_CONTROLS, in microseconds.
-        if (dev.Properties.TryGetValue("CCD_CONTROLS", out var cc)
-            && cc["Exposure"] != null)
-        {
-            return ("CCD_CONTROLS", "Exposure", 1_000_000.0);
+            var dev = _indi.Client?.GetDevice(deviceName);
+            if (dev != null)
+            {
+                if (dev.Properties.TryGetValue("STREAMING_EXPOSURE", out var se)
+                    && se["STREAMING_EXPOSURE_VALUE"] != null)
+                    return ("STREAMING_EXPOSURE", "STREAMING_EXPOSURE_VALUE", 1.0);
+                if (dev.Properties.TryGetValue("CCD_CONTROLS", out var cc)
+                    && cc["Exposure"] != null)
+                    return ("CCD_CONTROLS", "Exposure", 1_000_000.0);
+            }
+            Thread.Sleep(100);
         }
         return null;
     }

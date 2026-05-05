@@ -1822,12 +1822,29 @@ public class IndiDiscoveryService : BackgroundService
     public async Task SetGainAsync(string deviceName, int gain, CancellationToken ct)
     {
         var client = _client; if (client == null) return;
-        // PlayerOne exposes gain via CCD_CONTROLS.Gain; other drivers may use CCD_GAIN.GAIN.
-        var dev = client.GetDevice(deviceName);
-        if (dev?.Properties.ContainsKey("CCD_CONTROLS") == true && dev.Properties["CCD_CONTROLS"]["Gain"] != null)
-            await client.SetNumberAsync(deviceName, "CCD_CONTROLS", "Gain", gain, ct);
-        else if (dev?.Properties.ContainsKey("CCD_GAIN") == true)
-            await client.SetNumberAsync(deviceName, "CCD_GAIN", "GAIN", gain, ct);
+        // PlayerOne exposes gain via CCD_CONTROLS.Gain; other drivers use CCD_GAIN.GAIN.
+        // The element list under CCD_CONTROLS arrives over multiple INDI def messages
+        // after CONNECT — early callers (stream-start during camera connect) can hit
+        // this with the property registered but Gain element not yet populated. Wait
+        // up to 2 s for one of the known shapes to appear; without this the
+        // server's gain override silently no-ops on the first stream of a session.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var dev = client.GetDevice(deviceName);
+            if (dev?.Properties.ContainsKey("CCD_CONTROLS") == true && dev.Properties["CCD_CONTROLS"]["Gain"] != null)
+            {
+                await client.SetNumberAsync(deviceName, "CCD_CONTROLS", "Gain", gain, ct);
+                return;
+            }
+            if (dev?.Properties.ContainsKey("CCD_GAIN") == true && dev.Properties["CCD_GAIN"]["GAIN"] != null)
+            {
+                await client.SetNumberAsync(deviceName, "CCD_GAIN", "GAIN", gain, ct);
+                return;
+            }
+            try { await Task.Delay(100, ct); } catch (OperationCanceledException) { return; }
+        }
+        _log.LogWarning("SetGainAsync: no gain property found on {Device} after 2 s wait — request gain={Gain} dropped", deviceName, gain);
     }
 
     public async Task SetOffsetAsync(string deviceName, int offset, CancellationToken ct)
