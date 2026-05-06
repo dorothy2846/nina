@@ -56,7 +56,8 @@ public class CameraStreamService : IAsyncDisposable
     private int? _streamBinX = null;
     private int? _streamBinY = null;
     private int? _streamGainOverride = null;
-    private int? _savedBinX, _savedBinY, _savedGain;
+    private int? _streamOffsetOverride = null;
+    private int? _savedBinX, _savedBinY, _savedGain, _savedOffset;
     // Normalized ROI (0..1) — fraction of sensor to read out for streaming.
     // Default = full sensor. Planetary imaging shrinks this so the driver
     // reads a small window and fps climbs proportionally (320×240 around
@@ -179,13 +180,15 @@ public class CameraStreamService : IAsyncDisposable
     public long DroppedFrames => System.Threading.Interlocked.Read(ref _droppedFrames);
 
     public void Configure(double exposureSeconds, double maxFps, int? binX = null, int? binY = null, int? gain = null,
-                          double? roiFracW = null, double? roiFracH = null, double? roiFracCX = null, double? roiFracCY = null)
+                          double? roiFracW = null, double? roiFracH = null, double? roiFracCX = null, double? roiFracCY = null,
+                          int? offset = null)
     {
         if (exposureSeconds > 0) _exposureSeconds = exposureSeconds;
         if (maxFps > 0) _maxFps = maxFps;
         if (binX is int bx && bx > 0) _streamBinX = bx;
         if (binY is int by && by > 0) _streamBinY = by;
         if (gain is int g && g >= 0) _streamGainOverride = g;
+        if (offset is int o && o >= 0) _streamOffsetOverride = o;
         if (roiFracW is double rw) _roiFracW = Math.Clamp(rw, 0.05, 1.0);
         if (roiFracH is double rh) _roiFracH = Math.Clamp(rh, 0.05, 1.0);
         if (roiFracCX is double rcx) _roiFracCX = Math.Clamp(rcx, 0.0, 1.0);
@@ -200,10 +203,19 @@ public class CameraStreamService : IAsyncDisposable
     private CancellationTokenSource? _applyDebounceCts;
     private readonly object _applyLock = new();
     private const int ApplyDebounceMs = 350;
+    /// PlayerOne's USB driver stalls (stops delivering BLOBs entirely)
+    /// when the streaming OFF/ON cycle fires faster than ~1.5 s apart.
+    /// Symptoms: ffmpeg silent watchdog kicks in, ffmpeg restarts but the
+    /// camera-side pipeline stays dead. Serialise applies and enforce this
+    /// gap so rapid slider taps coalesce into one cycle with the LATEST
+    /// value.
+    private readonly SemaphoreSlim _applyGate = new(1, 1);
+    private DateTime _lastSensorCycleAt = DateTime.MinValue;
+    private const int MinCycleIntervalMs = 1500;
 
     public Task ConfigureAndApplyAsync(double exposureSeconds, double maxFps, int? binX, int? binY, int? gain,
                                        double? roiFracW, double? roiFracH, double? roiFracCX, double? roiFracCY,
-                                       CancellationToken ct)
+                                       CancellationToken ct, int? offset = null)
     {
         // Always store the user's intent immediately — the actual driver
         // writes happen on a delayed/coalesced worker. PlayerOne (and likely
@@ -213,7 +225,7 @@ public class CameraStreamService : IAsyncDisposable
         // coalesce: every call cancels the prior pending apply and arms a
         // fresh one — only the LATEST values reach the driver, after the
         // user stops adjusting for ApplyDebounceMs.
-        Configure(exposureSeconds, maxFps, binX, binY, gain, roiFracW, roiFracH, roiFracCX, roiFracCY);
+        Configure(exposureSeconds, maxFps, binX, binY, gain, roiFracW, roiFracH, roiFracCX, roiFracCY, offset);
 
         CancellationTokenSource newCts;
         lock (_applyLock)
@@ -242,16 +254,28 @@ public class CameraStreamService : IAsyncDisposable
     /// the last applied state — `prev*` here = "last successfully applied".
     private double _lastAppliedExp;
     private int? _lastAppliedGain;
+    private int? _lastAppliedOffset;
     private double _lastAppliedRoiW = 1, _lastAppliedRoiH = 1, _lastAppliedRoiCX = 0.5, _lastAppliedRoiCY = 0.5;
     private int? _lastAppliedBinX, _lastAppliedBinY;
 
     private async Task ApplyToDriverAsync(CancellationToken ct)
+    {
+        // Serialise applies. Two debounced applies can otherwise overlap: A
+        // is mid-OFF/ON cycle when B's debounce fires, B starts a second cycle
+        // while A is still tearing down → PlayerOne loses BLOB delivery.
+        await _applyGate.WaitAsync(ct);
+        try { await ApplyToDriverLockedAsync(ct); }
+        finally { _applyGate.Release(); }
+    }
+
+    private async Task ApplyToDriverLockedAsync(CancellationToken ct)
     {
         bool sensorTouched = _lastAppliedRoiW != _roiFracW || _lastAppliedRoiH != _roiFracH
             || _lastAppliedRoiCX != _roiFracCX || _lastAppliedRoiCY != _roiFracCY
             || _lastAppliedBinX != _streamBinX || _lastAppliedBinY != _streamBinY;
         bool exposureChanged = Math.Abs(_lastAppliedExp - _exposureSeconds) > 0.0001;
         bool gainChanged = _lastAppliedGain != _streamGainOverride;
+        bool offsetChanged = _lastAppliedOffset != _streamOffsetOverride;
 
         bool isRunning;
         string? device;
@@ -261,34 +285,24 @@ public class CameraStreamService : IAsyncDisposable
         var client = _indi.Client;
         if (client == null) return;
 
-        _log.LogInformation("ConfigureApply: exposureChanged={Ec} gainChanged={Gc} sensorTouched={St} exp={E}s gain={G}",
-            exposureChanged, gainChanged, sensorTouched, _exposureSeconds, _streamGainOverride);
+        _log.LogInformation("ConfigureApply: exp={Ec} gain={Gc} offset={Oc} sensor={St} exp={E}s gain={G} offset={O}",
+            exposureChanged, gainChanged, offsetChanged, sensorTouched, _exposureSeconds, _streamGainOverride, _streamOffsetOverride);
 
         // Update applied snapshots up-front so a follow-up tick won't
-        // re-issue the same writes if the apply succeeds. (If anything
-        // throws below, the in-memory snapshot is slightly ahead of
-        // reality — still safer than re-pushing rapid duplicate writes.)
+        // re-issue the same writes if the apply succeeds.
         _lastAppliedExp = _exposureSeconds;
         _lastAppliedGain = _streamGainOverride;
+        _lastAppliedOffset = _streamOffsetOverride;
         _lastAppliedRoiW = _roiFracW; _lastAppliedRoiH = _roiFracH;
         _lastAppliedRoiCX = _roiFracCX; _lastAppliedRoiCY = _roiFracCY;
         _lastAppliedBinX = _streamBinX; _lastAppliedBinY = _streamBinY;
 
-        // Live exposure update — resolve the driver's exact property name
-        // once at stream start (see ResolveLiveExposureProperty), then push
-        // the user's value into it. No fallback chain on the hot path.
-        if (exposureChanged && _liveExposureProperty is var prop && prop.HasValue)
-        {
-            var (propName, elName, scaleToDriverUnits) = prop.Value;
-            try
-            {
-                await client.SetNumberAsync(device, propName, elName, _exposureSeconds * scaleToDriverUnits, ct);
-                _log.LogInformation("ConfigureApply: pushed {Prop}.{El}={Val}", propName, elName, _exposureSeconds * scaleToDriverUnits);
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "CameraStream: live exposure set failed on {Prop}.{El}", propName, elName); }
-        }
-        // Live gain update — CCD_GAIN / CCD_CONTROLS are settable mid-stream
-        // on PlayerOne/ZWO. Same no-blip property as exposure.
+        // Gain + offset push live mid-stream (CCD_CONTROLS is fine to mutate
+        // while STREAM_ON). Exposure is intentionally NOT written here —
+        // PlayerOne ignores it mid-stream, and writing it during a running
+        // stream right before doing STREAM_OFF/ON puts the camera in an
+        // inconsistent state that frequently kills BLOB delivery. Defer to
+        // the cycle path where it's written between OFF and ON instead.
         if (gainChanged && _streamGainOverride is int g)
         {
             try
@@ -298,52 +312,64 @@ public class CameraStreamService : IAsyncDisposable
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: gain set failed"); }
         }
-
-        // Exposure-only changes also need the stream OFF/ON dance on
-        // PlayerOne (and possibly other drivers) — the value gets accepted
-        // into STREAMING_EXPOSURE_VALUE but the camera's running stream
-        // keeps the original exposure cached until the stream is rearmed.
-        // Symptom: slider moves in the UI, server confirms the property
-        // wrote, but lastFps and frame brightness don't change.
-        if (!sensorTouched && !exposureChanged) return;
-
-        // Server-side debounce on the OFF/ON cycle. iOS already debounces
-        // its /stream/configure POSTs at 250 ms, but that's still 4 cycles
-        // per second of slider drag — PlayerOne's driver gets confused and
-        // drops the camera connection entirely after a few rapid cycles.
-        // Skip if the last cycle was less than CycleMinIntervalMs ago; the
-        // user's most recent value is already in `_exposureSeconds` /
-        // `_streamGainOverride`, so the next configure call (after the
-        // dragging stops) will pick it up.
-        var sinceLast = (DateTime.UtcNow - _lastSensorCycleAt).TotalMilliseconds;
-        if (sinceLast < CycleMinIntervalMs)
+        if (offsetChanged && _streamOffsetOverride is int o)
         {
-            _log.LogDebug("CameraStream: skipping OFF/ON cycle ({Ms} ms since last)", (int)sinceLast);
-            return;
+            try
+            {
+                await _indi.SetOffsetAsync(device, o, ct);
+                _log.LogInformation("ConfigureApply: pushed offset={O}", o);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "CameraStream: offset set failed"); }
+        }
+
+        // Gain + offset push live above. Exposure changes are NOT cycled
+        // here on purpose: empirically PlayerOne USB-disconnects after 2
+        // OFF/ON cycles (latency climbs, then BLOB delivery stops, then
+        // CONNECTION goes Off and the camera drops off the bus entirely).
+        // Even with 1.5–2.5 s gating, the second cycle kills it. Mid-stream
+        // STREAMING_EXPOSURE writes are silently ignored by the driver, so
+        // there is no in-stream exposure change path that works.
+        // → store the value (already done above via _lastAppliedExp); the
+        //   user's mode toggle / app restart re-runs StartAsync, which
+        //   pushes the latest _exposureSeconds to STREAMING_EXPOSURE_VALUE
+        //   right after STREAM_ON.
+        if (!sensorTouched) return;
+
+        // Cycle gate. PlayerOne tolerates one OFF/ON cycle but stalls if a
+        // second cycle hits within ~1.5 s. Wait out the remaining gap.
+        var sinceLastCycle = (DateTime.UtcNow - _lastSensorCycleAt).TotalMilliseconds;
+        if (sinceLastCycle < MinCycleIntervalMs)
+        {
+            var waitMs = MinCycleIntervalMs - (int)sinceLastCycle;
+            _log.LogInformation("ConfigureApply: gating OFF/ON cycle by {Ms}ms", waitMs);
+            try { await Task.Delay(waitMs, ct); } catch (OperationCanceledException) { return; }
         }
         _lastSensorCycleAt = DateTime.UtcNow;
 
-        // Driver-level only: pause sensor, swap binning + sub-frame, resume.
-        // ffmpeg + WebRTC peers stay up the whole time; the receiver freezes
-        // on its last decoded frame for ~300-500 ms, then live frames flow
-        // at the new resolution. PlayerOne / ZWO drivers usually accept
-        // CCD_FRAME mid-stream — try that first; the OFF/ON dance is the
-        // conservative fallback for drivers that ignore the live update.
-        try
-        {
-            // Quick attempt: just push CCD_FRAME and see if the BLOB shrinks.
-            // If it doesn't take, the next OFF/ON pass picks it up anyway.
-        }
-        catch { }
+        // STREAM_OFF first — wait the empirical settle time so PlayerOne
+        // acks before any further writes hit the property bus.
+        _log.LogInformation("ConfigureApply: STREAM_OFF for cycle (exp={E} sensor={S})", exposureChanged, sensorTouched);
         try
         {
             await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
                 new[] { ("STREAM_ON", false), ("STREAM_OFF", true) }, ct);
         }
-        catch (Exception ex) { _log.LogDebug(ex, "CameraStream: stream OFF for ROI swap failed"); }
-        // 80 ms is the empirical floor for PlayerOne / ZWO to acknowledge
-        // STREAM_OFF before we re-arm the sub-frame; 200 ms was overshoot.
-        try { await Task.Delay(80, ct); } catch (OperationCanceledException) { return; }
+        catch (Exception ex) { _log.LogWarning(ex, "CameraStream: stream OFF failed"); }
+        try { await Task.Delay(200, ct); } catch (OperationCanceledException) { return; }
+
+        // Now safe to write properties — stream is paused. Push the LATEST
+        // exposure value (user may have moved slider while gated).
+        if (_liveExposureProperty is var prop && prop.HasValue)
+        {
+            var (propName, elName, scaleToDriverUnits) = prop.Value;
+            try
+            {
+                await client.SetNumberAsync(device, propName, elName, _exposureSeconds * scaleToDriverUnits, ct);
+                _log.LogInformation("ConfigureApply: pushed {Prop}.{El}={Val} during cycle", propName, elName, _exposureSeconds * scaleToDriverUnits);
+                _lastAppliedExp = _exposureSeconds;
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "CameraStream: cycle exposure set failed"); }
+        }
 
         if (_streamBinX is int bx && _streamBinY is int by)
         {
@@ -370,9 +396,8 @@ public class CameraStreamService : IAsyncDisposable
                 catch (Exception ex) { _log.LogWarning(ex, "CameraStream: live ROI set failed"); }
             }
         }
-        else
+        else if (sensorTouched)
         {
-            // Going back to full sensor.
             var size = _indi.GetSensorSize(device);
             if (size.HasValue)
             {
@@ -384,8 +409,9 @@ public class CameraStreamService : IAsyncDisposable
         {
             await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
                 new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
+            _log.LogInformation("ConfigureApply: STREAM_ON after cycle");
         }
-        catch (Exception ex) { _log.LogWarning(ex, "CameraStream: stream ON after ROI swap failed"); }
+        catch (Exception ex) { _log.LogWarning(ex, "CameraStream: stream ON after cycle failed"); }
     }
 
     public async Task StartAsync(CancellationToken ct)
@@ -452,7 +478,8 @@ public class CameraStreamService : IAsyncDisposable
         // INDI sensor state stays exactly as the user left it.
         bool overrideBinning = _streamBinX is int && _streamBinY is int;
         bool overrideGain = _streamGainOverride is int;
-        if (overrideBinning || overrideGain)
+        bool overrideOffset = _streamOffsetOverride is int;
+        if (overrideBinning || overrideGain || overrideOffset)
         {
             try
             {
@@ -462,6 +489,7 @@ public class CameraStreamService : IAsyncDisposable
                     _savedBinX = info.BinX;
                     _savedBinY = info.BinY;
                     _savedGain = info.Gain;
+                    _savedOffset = info.Offset;
                 }
             }
             catch (Exception ex) { _log.LogDebug(ex, "CameraStream: capture-settings snapshot failed"); }
@@ -475,13 +503,31 @@ public class CameraStreamService : IAsyncDisposable
             {
                 try { await _indi.SetGainAsync(device, _streamGainOverride!.Value, ct); } catch { }
             }
+            if (overrideOffset)
+            {
+                try { await _indi.SetOffsetAsync(device, _streamOffsetOverride!.Value, ct); } catch { }
+            }
         }
 
-        // Resolve the live-exposure property by introspecting the driver's
-        // actual properties — no fallback chain on the hot path. PlayerOne
-        // exposes "Exposure" inside CCD_CONTROLS (microseconds); ZWO/QHY
-        // expose STREAMING_EXPOSURE_VALUE (seconds). We pick once here and
-        // remember the resolution for live updates from /stream/configure.
+        // CCD_FAST_TOGGLE was tried here previously: PlayerOne flags it as
+        // an "Experimental Feature" in its INDI driver and crashes the
+        // driver process under sustained streaming. CCD_VIDEO_FORMAT → RAW8
+        // also rejected with state=Alert mid- and pre-stream. Leave both.
+
+        await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
+            new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
+
+        lock (_stateLock)
+        {
+            _running = true;
+            _streamingDevice = device;
+        }
+
+        // Resolve the live-exposure property AFTER STREAM_ON. PlayerOne's
+        // INDI driver only registers STREAMING_EXPOSURE once the StreamManager
+        // is active; resolving before STREAM_ON falls back to CCD_CONTROLS.
+        // Exposure (capture-side, requires a stream re-arm to take effect on
+        // the running stream — that's what produced the OFF/ON-dance kludge).
         _liveExposureProperty = ResolveLiveExposureProperty(device);
         if (_liveExposureProperty is var resolved && resolved.HasValue)
         {
@@ -496,24 +542,6 @@ public class CameraStreamService : IAsyncDisposable
         else
         {
             _log.LogWarning("CameraStream: no live-exposure property found on device {Dev}", device);
-        }
-
-        // CCD_FAST_TOGGLE was tried here previously: PlayerOne flags it as
-        // an "Experimental Feature" in its INDI driver and crashes the
-        // driver process under sustained streaming. We saw the device drop
-        // off the bus entirely with `Device 'PlayerOne CCD Uranus-C PRO'
-        // not published by any driver`. Stability beats the ~50 ms latency
-        // win — leave the property alone.
-        // CCD_VIDEO_FORMAT → RAW8: also tried, PlayerOne rejects with
-        // state=Alert mid- and pre-stream regardless of cycle order.
-
-        await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
-            new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
-
-        lock (_stateLock)
-        {
-            _running = true;
-            _streamingDevice = device;
         }
 
         // Force debayer-vs-passthrough decision on the very first frame
@@ -585,12 +613,16 @@ public class CameraStreamService : IAsyncDisposable
             {
                 try { await _indi.SetGainAsync(device, g, ct); } catch { }
             }
+            if (_savedOffset is int sof)
+            {
+                try { await _indi.SetOffsetAsync(device, sof, ct); } catch { }
+            }
             if (_savedSubFrame is (int rx, int ry, int rw, int rh))
             {
                 try { await _indi.SetSubFrameAsync(device, rx, ry, rw, rh, ct); }
                 catch (Exception ex) { _log.LogWarning(ex, "CameraStream: ROI restore failed"); }
             }
-            _savedBinX = _savedBinY = _savedGain = null;
+            _savedBinX = _savedBinY = _savedGain = _savedOffset = null;
             _savedSubFrame = null;
 
             try
@@ -714,8 +746,6 @@ public class CameraStreamService : IAsyncDisposable
     /// disconnects the camera after rapid cycling — observed at the iOS-
     /// slider drag rate of 4 Hz. 800 ms gives the driver breathing room
     /// while still feeling responsive on a single deliberate adjustment.</summary>
-    private const int CycleMinIntervalMs = 800;
-    private DateTime _lastSensorCycleAt = DateTime.MinValue;
 
     /// Single-flight in-process processing slot. The INDI client thread that
     /// raises BLOB events MUST NOT do CPU work — debayer + JPEG re-encode on

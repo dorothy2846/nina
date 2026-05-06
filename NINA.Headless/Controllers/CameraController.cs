@@ -590,13 +590,13 @@ public class CameraController : ControllerBase
     [HttpPost("stream/configure")]
     public async Task<IActionResult> StreamConfigure([FromBody] StreamConfigRequest request)
     {
-        // ConfigureAndApplyAsync restarts the live stream when ROI / binning
-        // changed — INDI drivers won't honor a mid-stream CCD_FRAME update,
-        // so the user wouldn't actually see the smaller BLOB without it.
+        // Exposure / gain / offset are pushed live to the running stream;
+        // ROI / binning trigger a brief sensor-side OFF/ON dance because
+        // they change sensor topology.
         await _stream.ConfigureAndApplyAsync(
             request.ExposureSeconds, request.MaxFps, request.BinX, request.BinY, request.Gain,
             request.RoiW, request.RoiH, request.RoiCx, request.RoiCy,
-            HttpContext.RequestAborted);
+            HttpContext.RequestAborted, request.Offset);
         return Ok(new { success = true, exposureSeconds = _stream.ExposureSeconds, maxFps = _stream.MaxFps });
     }
 
@@ -606,7 +606,8 @@ public class CameraController : ControllerBase
     /// before posting; server does the sensor-pixel arithmetic.</summary>
     public record StreamConfigRequest(double ExposureSeconds, double MaxFps,
         int? BinX = null, int? BinY = null, int? Gain = null,
-        double? RoiW = null, double? RoiH = null, double? RoiCx = null, double? RoiCy = null);
+        double? RoiW = null, double? RoiH = null, double? RoiCx = null, double? RoiCy = null,
+        int? Offset = null);
 
     // ----- SER/AVI recording (driver-native) -----
     // The INDI driver owns the file — we just flip switches. Default output:
