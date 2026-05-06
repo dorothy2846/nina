@@ -668,6 +668,16 @@ public class CameraStreamService : IAsyncDisposable
         _wbInitialized = false;
         _wbR = _wbG = _wbB = 1f;
 
+        // Stream started fresh — driver now reflects the current `_exposureSeconds`,
+        // gain, offset, ROI, binning. Sync the applied snapshots so the next
+        // ApplyToDriver invocation correctly detects "no change" instead of
+        // re-cycling the latest value.
+        _lastAppliedExp = _exposureSeconds;
+        _lastAppliedGain = _streamGainOverride;
+        _lastAppliedOffset = _streamOffsetOverride;
+        _lastAppliedRoiW = _roiFracW; _lastAppliedRoiH = _roiFracH;
+        _lastAppliedRoiCX = _roiFracCX; _lastAppliedRoiCY = _roiFracCY;
+        _lastAppliedBinX = _streamBinX; _lastAppliedBinY = _streamBinY;
         _log.LogInformation("CameraStream: native stream started on {Device} (exp={Exp}s)", device, _exposureSeconds);
     }
 
