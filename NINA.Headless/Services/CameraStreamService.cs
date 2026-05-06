@@ -297,12 +297,24 @@ public class CameraStreamService : IAsyncDisposable
         _lastAppliedRoiCX = _roiFracCX; _lastAppliedRoiCY = _roiFracCY;
         _lastAppliedBinX = _streamBinX; _lastAppliedBinY = _streamBinY;
 
-        // Gain + offset push live mid-stream (CCD_CONTROLS is fine to mutate
-        // while STREAM_ON). Exposure is intentionally NOT written here —
-        // PlayerOne ignores it mid-stream, and writing it during a running
-        // stream right before doing STREAM_OFF/ON puts the camera in an
-        // inconsistent state that frequently kills BLOB delivery. Defer to
-        // the cycle path where it's written between OFF and ON instead.
+        // Live writes — all CCD_CONTROLS / STREAMING_EXPOSURE updates push
+        // directly to the driver while the stream stays armed. Earlier we
+        // measured no FPS change after STREAMING_EXPOSURE writes and
+        // concluded it was ignored, but FPS on PlayerOne is decoupled from
+        // exposure (USB cadence is fixed); the actual sensor integration
+        // time DOES update. Visual brightness change is the real signal.
+        // Cycling is reserved for ROI/binning where the property change
+        // genuinely cannot apply while STREAM_ON.
+        if (exposureChanged && _liveExposureProperty is var prop && prop.HasValue)
+        {
+            var (propName, elName, scaleToDriverUnits) = prop.Value;
+            try
+            {
+                await client.SetNumberAsync(device, propName, elName, _exposureSeconds * scaleToDriverUnits, ct);
+                _log.LogInformation("ConfigureApply: pushed {Prop}.{El}={Val}", propName, elName, _exposureSeconds * scaleToDriverUnits);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "CameraStream: live exposure set failed"); }
+        }
         if (gainChanged && _streamGainOverride is int g)
         {
             try
@@ -322,17 +334,9 @@ public class CameraStreamService : IAsyncDisposable
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: offset set failed"); }
         }
 
-        // Gain + offset push live above. Exposure changes are NOT cycled
-        // here on purpose: empirically PlayerOne USB-disconnects after 2
-        // OFF/ON cycles (latency climbs, then BLOB delivery stops, then
-        // CONNECTION goes Off and the camera drops off the bus entirely).
-        // Even with 1.5–2.5 s gating, the second cycle kills it. Mid-stream
-        // STREAMING_EXPOSURE writes are silently ignored by the driver, so
-        // there is no in-stream exposure change path that works.
-        // → store the value (already done above via _lastAppliedExp); the
-        //   user's mode toggle / app restart re-runs StartAsync, which
-        //   pushes the latest _exposureSeconds to STREAMING_EXPOSURE_VALUE
-        //   right after STREAM_ON.
+        // ROI/binning genuinely change sensor topology and need an OFF/ON
+        // cycle. PlayerOne tolerates ONE such cycle reliably; the cycle
+        // gate enforces a minimum gap so two cannot stack.
         if (!sensorTouched) return;
 
         // Cycle gate. PlayerOne tolerates one OFF/ON cycle but stalls if a
@@ -359,9 +363,9 @@ public class CameraStreamService : IAsyncDisposable
 
         // Now safe to write properties — stream is paused. Push the LATEST
         // exposure value (user may have moved slider while gated).
-        if (_liveExposureProperty is var prop && prop.HasValue)
+        if (_liveExposureProperty is var cycleProp && cycleProp.HasValue)
         {
-            var (propName, elName, scaleToDriverUnits) = prop.Value;
+            var (propName, elName, scaleToDriverUnits) = cycleProp.Value;
             try
             {
                 await client.SetNumberAsync(device, propName, elName, _exposureSeconds * scaleToDriverUnits, ct);
