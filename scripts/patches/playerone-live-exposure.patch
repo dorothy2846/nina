@@ -1,0 +1,43 @@
+diff --git a/indi-playerone/playerone_base.cpp b/indi-playerone/playerone_base.cpp
+index 9262bbe0..0480e344 100644
+--- a/indi-playerone/playerone_base.cpp
++++ b/indi-playerone/playerone_base.cpp
+@@ -149,7 +149,8 @@ bool POABase::stopExposure()
+ void POABase::workerStreamVideo(const std::atomic_bool &isAbortToQuit)
+ {
+     POAErrors ret;
+-    double ExposureRequest = 1.0 / Streamer->getTargetFPS();
++    double currentTargetFPS = Streamer->getTargetFPS();
++    double ExposureRequest = 1.0 / currentTargetFPS;
+     POAConfigValue confVal;
+ #ifdef USE_POA_EXP
+     confVal.floatValue = static_cast<double>(ExposureRequest * 0.95);
+@@ -176,6 +177,28 @@ void POABase::workerStreamVideo(const std::atomic_bool &isAbortToQuit)
+ 
+     while (!isAbortToQuit)
+     {
++        // Live exposure update: re-poll target FPS each iteration. INDI
++        // StreamManager updates target FPS when STREAMING_EXPOSURE_VALUE is
++        // written by the client. Without this re-poll the worker locks in
++        // the exposure from stream start and ignores all subsequent
++        // STREAMING_EXPOSURE updates — forcing clients into an OFF/ON
++        // cycle dance just to change brightness.
++        double newTargetFPS = Streamer->getTargetFPS();
++        if (std::abs(newTargetFPS - currentTargetFPS) > 0.001 && newTargetFPS > 0)
++        {
++            currentTargetFPS = newTargetFPS;
++            ExposureRequest = 1.0 / currentTargetFPS;
++#ifdef USE_POA_EXP
++            confVal.floatValue = static_cast<double>(ExposureRequest * 0.95);
++            POASetConfig(mCameraInfo.cameraID, POA_EXP, confVal, POA_FALSE);
++#else
++            confVal.intValue = static_cast<long>(ExposureRequest * 950000.0);
++            POASetConfig(mCameraInfo.cameraID, POA_EXPOSURE, confVal, POA_FALSE);
++#endif
++            waitMS = static_cast<int>((ExposureRequest * 1000.0) + 500);
++            LOGF_INFO("Live exposure update: targetFPS=%.3f exp=%ldus", currentTargetFPS, confVal.intValue);
++        }
++
+         POABool pIsReady = POA_FALSE;
+         while (pIsReady == POA_FALSE)
+         {

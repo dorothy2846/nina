@@ -202,43 +202,26 @@ public class CameraStreamService : IAsyncDisposable
     /// land straight into the existing pipeline. Sub-second ROI swap.</summary>
     private CancellationTokenSource? _applyDebounceCts;
     private readonly object _applyLock = new();
-    /// 1500 ms slider-stop debounce — long enough that drag motion coalesces
-    /// into a single apply (we will burn one PlayerOne cycle), short enough
-    /// that the user feels the change land within ~2 s of releasing.
-    private const int ApplyDebounceMs = 1500;
-    /// Apply serialisation. Without this, two debounced applies that both
-    /// fire close together can race the cycle code.
+    /// Slider-stop debounce. Coalesces a drag's worth of intermediate values
+    /// into one apply when the user pauses.
+    private const int ApplyDebounceMs = 350;
+    /// Apply serialisation. ROI/binning changes drive a STREAM_OFF/ON
+    /// dance; without this gate, two applies could race that dance and
+    /// leave the camera stuck STREAM_OFF.
     private readonly SemaphoreSlim _applyGate = new(1, 1);
-    /// Sensor-cycle gate (ROI/binning). PlayerOne handles one such cycle
+    /// ROI/binning cycle gate. PlayerOne tolerates one OFF/ON cycle
     /// reliably but stalls if a second hits within ~1.5 s.
     private DateTime _lastSensorCycleAt = DateTime.MinValue;
     private const int MinCycleIntervalMs = 1500;
-    /// Hard lockout between full Stop+Start cycles (the only path that
-    /// actually applies a new exposure — mid-stream STREAMING_EXPOSURE
-    /// writes are silently ignored, verified by brightness probe). PlayerOne
-    /// USB-disconnects after 2-3 cycles spaced under ~10 s; 30 s is the
-    /// empirical safe interval.
-    private DateTime _lastFullCycleAt = DateTime.MinValue;
-    private const int FullCycleLockoutMs = 30000;
-    /// Latest deferred-apply timer. When the lockout is active and a new
-    /// exposure value comes in, we arm one of these to fire ApplyToDriver
-    /// the moment the lockout clears, with whatever the user has set by
-    /// then. New configures cancel the prior timer so only the latest
-    /// pending apply runs.
-    private CancellationTokenSource? _deferredApplyCts;
 
     public Task ConfigureAndApplyAsync(double exposureSeconds, double maxFps, int? binX, int? binY, int? gain,
                                        double? roiFracW, double? roiFracH, double? roiFracCX, double? roiFracCY,
                                        CancellationToken ct, int? offset = null)
     {
-        // Always store the user's intent immediately — the actual driver
-        // writes happen on a delayed/coalesced worker. PlayerOne (and likely
-        // others) get unhappy with multiple SetNumber writes in quick
-        // succession and disconnect the camera entirely; even iOS's
-        // 250 ms client-side debounce isn't always enough. Server-side
-        // coalesce: every call cancels the prior pending apply and arms a
-        // fresh one — only the LATEST values reach the driver, after the
-        // user stops adjusting for ApplyDebounceMs.
+        // Store user intent immediately. The actual driver writes are
+        // debounced — every new call cancels the prior pending apply, so
+        // only the latest values reach the driver after the user pauses
+        // for ApplyDebounceMs.
         Configure(exposureSeconds, maxFps, binX, binY, gain, roiFracW, roiFracH, roiFracCX, roiFracCY, offset);
 
         CancellationTokenSource newCts;
@@ -252,11 +235,9 @@ public class CameraStreamService : IAsyncDisposable
         {
             try { await Task.Delay(ApplyDebounceMs, newCts.Token); }
             catch (OperationCanceledException) { return; }
-            // Pass CancellationToken.None into ApplyToDriverAsync so a follow-up
-            // configure arriving mid-cycle CAN'T cancel an in-progress STREAM
-            // OFF→delay→ON dance and leave the camera stuck with STREAM_OFF.
-            // The debounce protects the FRONT of the apply (we coalesce
-            // calls); the apply itself runs to completion atomically.
+            // CancellationToken.None into the apply so a follow-up configure
+            // can't cancel an in-progress STREAM_OFF→delay→ON dance and
+            // leave the camera stuck STREAM_OFF.
             try { await ApplyToDriverAsync(CancellationToken.None); }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: deferred apply failed"); }
         });
@@ -274,31 +255,10 @@ public class CameraStreamService : IAsyncDisposable
 
     private async Task ApplyToDriverAsync(CancellationToken ct)
     {
-        // Serialise applies. Two debounced applies can otherwise overlap: A
-        // is mid-OFF/ON cycle when B's debounce fires, B starts a second cycle
-        // while A is still tearing down → PlayerOne loses BLOB delivery.
+        // Serialise applies so two ROI/binning cycles can't overlap.
         await _applyGate.WaitAsync(ct);
         try { await ApplyToDriverLockedAsync(ct); }
         finally { _applyGate.Release(); }
-    }
-
-    /// Best-effort camera USB reconnect after a Stop+Start cycle that left
-    /// the driver disconnected. PlayerOne's INDI driver puts CONNECTION=Off
-    /// when its USB layer trips; nothing in the stream pipeline auto-recovers
-    /// from that without explicit reconnect.
-    private async Task TryReconnectCameraAndRestartAsync()
-    {
-        var device = _equipment.GetSelected(DeviceKind.Camera)?.UniqueId;
-        if (device == null) { _log.LogWarning("auto-reconnect: no selected camera"); return; }
-        try
-        {
-            var result = await _indi.ConnectCameraAsync(device, CancellationToken.None);
-            if (!result.Ok) { _log.LogWarning("auto-reconnect: ConnectCameraAsync failed: {M}", result.Reason); return; }
-            await Task.Delay(2000); // give driver time to publish CCD_VIDEO_STREAM + STREAMING_EXPOSURE
-            await StartAsync(CancellationToken.None);
-            _log.LogInformation("auto-reconnect: camera + stream restored");
-        }
-        catch (Exception ex) { _log.LogError(ex, "auto-reconnect failed"); }
     }
 
     private async Task ApplyToDriverLockedAsync(CancellationToken ct)
@@ -321,29 +281,19 @@ public class CameraStreamService : IAsyncDisposable
         _log.LogInformation("ConfigureApply: exp={Ec} gain={Gc} offset={Oc} sensor={St} exp={E}s gain={G} offset={O}",
             exposureChanged, gainChanged, offsetChanged, sensorTouched, _exposureSeconds, _streamGainOverride, _streamOffsetOverride);
 
-        // Live-write snapshots can update upfront — gain/offset DO apply
-        // immediately on PlayerOne (CCD_CONTROLS mid-stream is fine), so
-        // claiming "applied" is honest. Sensor/exposure snapshots are
-        // updated below only after their respective cycle completes,
-        // because a deferred-apply path needs to re-detect them as
-        // unchanged-or-changed when its timer fires.
-        _lastAppliedGain = _streamGainOverride;
-        _lastAppliedOffset = _streamOffsetOverride;
-
-        // Live writes — all CCD_CONTROLS / STREAMING_EXPOSURE updates push
-        // directly to the driver while the stream stays armed. Earlier we
-        // measured no FPS change after STREAMING_EXPOSURE writes and
-        // concluded it was ignored, but FPS on PlayerOne is decoupled from
-        // exposure (USB cadence is fixed); the actual sensor integration
-        // time DOES update. Visual brightness change is the real signal.
-        // Cycling is reserved for ROI/binning where the property change
-        // genuinely cannot apply while STREAM_ON.
+        // Live writes — all CCD_CONTROLS + STREAMING_EXPOSURE updates push
+        // directly to the running stream. Verified end-to-end with the
+        // patched indi-3rdparty playerone driver (worker re-polls
+        // Streamer->getTargetFPS each iteration): mid-stream property writes
+        // change actual sensor integration time on the very next frame,
+        // brightness probe confirms.
         if (exposureChanged && _liveExposureProperty is var prop && prop.HasValue)
         {
             var (propName, elName, scaleToDriverUnits) = prop.Value;
             try
             {
                 await client.SetNumberAsync(device, propName, elName, _exposureSeconds * scaleToDriverUnits, ct);
+                _lastAppliedExp = _exposureSeconds;
                 _log.LogInformation("ConfigureApply: pushed {Prop}.{El}={Val}", propName, elName, _exposureSeconds * scaleToDriverUnits);
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: live exposure set failed"); }
@@ -353,6 +303,7 @@ public class CameraStreamService : IAsyncDisposable
             try
             {
                 await _indi.SetGainAsync(device, g, ct);
+                _lastAppliedGain = _streamGainOverride;
                 _log.LogInformation("ConfigureApply: pushed gain={G}", g);
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: gain set failed"); }
@@ -362,53 +313,10 @@ public class CameraStreamService : IAsyncDisposable
             try
             {
                 await _indi.SetOffsetAsync(device, o, ct);
+                _lastAppliedOffset = _streamOffsetOverride;
                 _log.LogInformation("ConfigureApply: pushed offset={O}", o);
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: offset set failed"); }
-        }
-
-        // Exposure-only change: full Stop+Start is the only path that
-        // applies on PlayerOne (mid-stream STREAMING_EXPOSURE write is
-        // ignored — verified by brightness probe, meanY 83→83 across
-        // 0.05 s vs 2.0 s writes). Hard lockout enforces PlayerOne's
-        // tolerance limit; rapid changes coalesce via the deferred-apply
-        // timer that fires once at lockout end with the latest value.
-        if (exposureChanged && !sensorTouched)
-        {
-            var sinceFull = (DateTime.UtcNow - _lastFullCycleAt).TotalMilliseconds;
-            if (sinceFull >= FullCycleLockoutMs)
-            {
-                _lastFullCycleAt = DateTime.UtcNow;
-                var targetExp = _exposureSeconds;
-                _log.LogInformation("ConfigureApply: full Stop+Start for exposure={E}s", targetExp);
-                try
-                {
-                    await StopAsync(CancellationToken.None);
-                    await StartAsync(CancellationToken.None);
-                    _lastAppliedExp = targetExp;
-                    _log.LogInformation("ConfigureApply: full cycle complete (exp={E}s)", targetExp);
-                }
-                catch (Exception ex)
-                {
-                    _log.LogWarning(ex, "ConfigureApply: full cycle failed; trying camera reconnect");
-                    await TryReconnectCameraAndRestartAsync();
-                }
-                return;
-            }
-
-            var waitMs = (int)(FullCycleLockoutMs - sinceFull);
-            _log.LogInformation("ConfigureApply: full-cycle lockout {Ms}ms — deferring exposure apply", waitMs);
-            _deferredApplyCts?.Cancel();
-            _deferredApplyCts = new CancellationTokenSource();
-            var token = _deferredApplyCts.Token;
-            _ = Task.Run(async () =>
-            {
-                try { await Task.Delay(waitMs, token); }
-                catch (OperationCanceledException) { return; }
-                try { await ApplyToDriverAsync(CancellationToken.None); }
-                catch (Exception ex) { _log.LogWarning(ex, "ConfigureApply: deferred apply failed"); }
-            });
-            return;
         }
 
         // ROI/binning genuinely change sensor topology and need an OFF/ON
