@@ -202,12 +202,12 @@ public class CameraStreamService : IAsyncDisposable
     /// land straight into the existing pipeline. Sub-second ROI swap.</summary>
     private CancellationTokenSource? _applyDebounceCts;
     private readonly object _applyLock = new();
-    /// Slider-stop debounce. Coalesces a drag's worth of intermediate values
-    /// into one apply when the user pauses. Patched playerone driver
-    /// accepts live STREAMING_EXPOSURE writes cheaply (worker re-polls
-    /// each iteration), so we keep the debounce short — slider response
-    /// delay is dominated by exposure cycle + pipeline anyway.
-    private const int ApplyDebounceMs = 80;
+    /// Slider-stop debounce. iOS already coalesces drag motion to ~20 Hz,
+    /// and the patched playerone driver picks up each STREAMING_EXPOSURE
+    /// write on the next worker iteration, so additional server-side
+    /// debounce only adds perceived input lag without preventing any real
+    /// problem. Set to a tiny value just to absorb burst arrivals.
+    private const int ApplyDebounceMs = 10;
     /// Apply serialisation. ROI/binning changes drive a STREAM_OFF/ON
     /// dance; without this gate, two applies could race that dance and
     /// leave the camera stuck STREAM_OFF.
