@@ -202,16 +202,30 @@ public class CameraStreamService : IAsyncDisposable
     /// land straight into the existing pipeline. Sub-second ROI swap.</summary>
     private CancellationTokenSource? _applyDebounceCts;
     private readonly object _applyLock = new();
-    private const int ApplyDebounceMs = 350;
-    /// PlayerOne's USB driver stalls (stops delivering BLOBs entirely)
-    /// when the streaming OFF/ON cycle fires faster than ~1.5 s apart.
-    /// Symptoms: ffmpeg silent watchdog kicks in, ffmpeg restarts but the
-    /// camera-side pipeline stays dead. Serialise applies and enforce this
-    /// gap so rapid slider taps coalesce into one cycle with the LATEST
-    /// value.
+    /// 1500 ms slider-stop debounce — long enough that drag motion coalesces
+    /// into a single apply (we will burn one PlayerOne cycle), short enough
+    /// that the user feels the change land within ~2 s of releasing.
+    private const int ApplyDebounceMs = 1500;
+    /// Apply serialisation. Without this, two debounced applies that both
+    /// fire close together can race the cycle code.
     private readonly SemaphoreSlim _applyGate = new(1, 1);
+    /// Sensor-cycle gate (ROI/binning). PlayerOne handles one such cycle
+    /// reliably but stalls if a second hits within ~1.5 s.
     private DateTime _lastSensorCycleAt = DateTime.MinValue;
     private const int MinCycleIntervalMs = 1500;
+    /// Hard lockout between full Stop+Start cycles (the only path that
+    /// actually applies a new exposure — mid-stream STREAMING_EXPOSURE
+    /// writes are silently ignored, verified by brightness probe). PlayerOne
+    /// USB-disconnects after 2-3 cycles spaced under ~10 s; 30 s is the
+    /// empirical safe interval.
+    private DateTime _lastFullCycleAt = DateTime.MinValue;
+    private const int FullCycleLockoutMs = 30000;
+    /// Latest deferred-apply timer. When the lockout is active and a new
+    /// exposure value comes in, we arm one of these to fire ApplyToDriver
+    /// the moment the lockout clears, with whatever the user has set by
+    /// then. New configures cancel the prior timer so only the latest
+    /// pending apply runs.
+    private CancellationTokenSource? _deferredApplyCts;
 
     public Task ConfigureAndApplyAsync(double exposureSeconds, double maxFps, int? binX, int? binY, int? gain,
                                        double? roiFracW, double? roiFracH, double? roiFracCX, double? roiFracCY,
@@ -268,6 +282,25 @@ public class CameraStreamService : IAsyncDisposable
         finally { _applyGate.Release(); }
     }
 
+    /// Best-effort camera USB reconnect after a Stop+Start cycle that left
+    /// the driver disconnected. PlayerOne's INDI driver puts CONNECTION=Off
+    /// when its USB layer trips; nothing in the stream pipeline auto-recovers
+    /// from that without explicit reconnect.
+    private async Task TryReconnectCameraAndRestartAsync()
+    {
+        var device = _equipment.GetSelected(DeviceKind.Camera)?.UniqueId;
+        if (device == null) { _log.LogWarning("auto-reconnect: no selected camera"); return; }
+        try
+        {
+            var result = await _indi.ConnectCameraAsync(device, CancellationToken.None);
+            if (!result.Ok) { _log.LogWarning("auto-reconnect: ConnectCameraAsync failed: {M}", result.Reason); return; }
+            await Task.Delay(2000); // give driver time to publish CCD_VIDEO_STREAM + STREAMING_EXPOSURE
+            await StartAsync(CancellationToken.None);
+            _log.LogInformation("auto-reconnect: camera + stream restored");
+        }
+        catch (Exception ex) { _log.LogError(ex, "auto-reconnect failed"); }
+    }
+
     private async Task ApplyToDriverLockedAsync(CancellationToken ct)
     {
         bool sensorTouched = _lastAppliedRoiW != _roiFracW || _lastAppliedRoiH != _roiFracH
@@ -288,14 +321,14 @@ public class CameraStreamService : IAsyncDisposable
         _log.LogInformation("ConfigureApply: exp={Ec} gain={Gc} offset={Oc} sensor={St} exp={E}s gain={G} offset={O}",
             exposureChanged, gainChanged, offsetChanged, sensorTouched, _exposureSeconds, _streamGainOverride, _streamOffsetOverride);
 
-        // Update applied snapshots up-front so a follow-up tick won't
-        // re-issue the same writes if the apply succeeds.
-        _lastAppliedExp = _exposureSeconds;
+        // Live-write snapshots can update upfront — gain/offset DO apply
+        // immediately on PlayerOne (CCD_CONTROLS mid-stream is fine), so
+        // claiming "applied" is honest. Sensor/exposure snapshots are
+        // updated below only after their respective cycle completes,
+        // because a deferred-apply path needs to re-detect them as
+        // unchanged-or-changed when its timer fires.
         _lastAppliedGain = _streamGainOverride;
         _lastAppliedOffset = _streamOffsetOverride;
-        _lastAppliedRoiW = _roiFracW; _lastAppliedRoiH = _roiFracH;
-        _lastAppliedRoiCX = _roiFracCX; _lastAppliedRoiCY = _roiFracCY;
-        _lastAppliedBinX = _streamBinX; _lastAppliedBinY = _streamBinY;
 
         // Live writes — all CCD_CONTROLS / STREAMING_EXPOSURE updates push
         // directly to the driver while the stream stays armed. Earlier we
@@ -332,6 +365,50 @@ public class CameraStreamService : IAsyncDisposable
                 _log.LogInformation("ConfigureApply: pushed offset={O}", o);
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: offset set failed"); }
+        }
+
+        // Exposure-only change: full Stop+Start is the only path that
+        // applies on PlayerOne (mid-stream STREAMING_EXPOSURE write is
+        // ignored — verified by brightness probe, meanY 83→83 across
+        // 0.05 s vs 2.0 s writes). Hard lockout enforces PlayerOne's
+        // tolerance limit; rapid changes coalesce via the deferred-apply
+        // timer that fires once at lockout end with the latest value.
+        if (exposureChanged && !sensorTouched)
+        {
+            var sinceFull = (DateTime.UtcNow - _lastFullCycleAt).TotalMilliseconds;
+            if (sinceFull >= FullCycleLockoutMs)
+            {
+                _lastFullCycleAt = DateTime.UtcNow;
+                var targetExp = _exposureSeconds;
+                _log.LogInformation("ConfigureApply: full Stop+Start for exposure={E}s", targetExp);
+                try
+                {
+                    await StopAsync(CancellationToken.None);
+                    await StartAsync(CancellationToken.None);
+                    _lastAppliedExp = targetExp;
+                    _log.LogInformation("ConfigureApply: full cycle complete (exp={E}s)", targetExp);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning(ex, "ConfigureApply: full cycle failed; trying camera reconnect");
+                    await TryReconnectCameraAndRestartAsync();
+                }
+                return;
+            }
+
+            var waitMs = (int)(FullCycleLockoutMs - sinceFull);
+            _log.LogInformation("ConfigureApply: full-cycle lockout {Ms}ms — deferring exposure apply", waitMs);
+            _deferredApplyCts?.Cancel();
+            _deferredApplyCts = new CancellationTokenSource();
+            var token = _deferredApplyCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try { await Task.Delay(waitMs, token); }
+                catch (OperationCanceledException) { return; }
+                try { await ApplyToDriverAsync(CancellationToken.None); }
+                catch (Exception ex) { _log.LogWarning(ex, "ConfigureApply: deferred apply failed"); }
+            });
+            return;
         }
 
         // ROI/binning genuinely change sensor topology and need an OFF/ON
@@ -414,6 +491,9 @@ public class CameraStreamService : IAsyncDisposable
             await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
                 new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
             _log.LogInformation("ConfigureApply: STREAM_ON after cycle");
+            _lastAppliedRoiW = _roiFracW; _lastAppliedRoiH = _roiFracH;
+            _lastAppliedRoiCX = _roiFracCX; _lastAppliedRoiCY = _roiFracCY;
+            _lastAppliedBinX = _streamBinX; _lastAppliedBinY = _streamBinY;
         }
         catch (Exception ex) { _log.LogWarning(ex, "CameraStream: stream ON after cycle failed"); }
     }
