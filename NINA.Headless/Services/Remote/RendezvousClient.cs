@@ -38,7 +38,6 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
     // separate bool drifts.
     private MediaStreamTrack? _videoTrack;
     private long _videoStreamStartTicks;
-    private uint _videoRtpTimestamp;
 
     private ClientWebSocket? _ws;
     private RTCPeerConnection? _peer;
@@ -331,50 +330,42 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
 
     private void AttachVideoHandlers()
     {
-        lock (_peerLock)
-        {
-            _videoStreamStartTicks = 0;
-            _videoRtpTimestamp = 0;
-        }
-        _h264.FrameBoundary -= OnVideoFrameBoundary;
+        lock (_peerLock) { _videoStreamStartTicks = 0; }
         _h264.NaluReady -= OnVideoNaluReady;
-        _h264.FrameBoundary += OnVideoFrameBoundary;
         _h264.NaluReady += OnVideoNaluReady;
     }
 
     private void DetachVideoHandlers()
     {
-        _h264.FrameBoundary -= OnVideoFrameBoundary;
         _h264.NaluReady -= OnVideoNaluReady;
     }
 
-    /// <summary>Wall-clock RTP timestamp at 90 kHz from the first frame of
-    /// this session. Independent of the LAN counter so two simultaneous
-    /// viewers each have their own monotonic clock.</summary>
-    private void OnVideoFrameBoundary()
+    /// <summary>Wall-clock 90 kHz RTP timestamp from the first NAL of this
+    /// session. Independent of the LAN counter so two simultaneous viewers
+    /// each have their own monotonic clock.</summary>
+    private uint CurrentRtpTimestamp()
     {
         var startTicks = Volatile.Read(ref _videoStreamStartTicks);
         if (startTicks == 0)
         {
-            startTicks = DateTime.UtcNow.Ticks;
-            Interlocked.CompareExchange(ref _videoStreamStartTicks, startTicks, 0);
+            var nowTicks = DateTime.UtcNow.Ticks;
+            Interlocked.CompareExchange(ref _videoStreamStartTicks, nowTicks, 0);
             startTicks = Volatile.Read(ref _videoStreamStartTicks);
         }
         var elapsedTicks = DateTime.UtcNow.Ticks - startTicks;
-        _videoRtpTimestamp = (uint)(elapsedTicks * 9 / 1000);
+        return (uint)(elapsedTicks * 9 / 1000);
     }
 
     private void OnVideoNaluReady(byte[] nalu)
     {
         // Snapshot under lock so a concurrent peer-state-change can't null
         // the track between the check and the send. SendVideo on a closed
-        // peer just throws; we swallow because the next FrameBoundary will
-        // re-attempt with the new state.
+        // peer just throws; we swallow and rely on the next NAL to retry.
         RTCPeerConnection? pc;
         MediaStreamTrack? track;
         lock (_peerLock) { pc = _peer; track = _videoTrack; }
         if (pc == null || track == null) return;
-        try { pc.SendVideo(_videoRtpTimestamp, nalu); }
+        try { pc.SendVideo(CurrentRtpTimestamp(), nalu); }
         catch (Exception ex) { _log.LogDebug(ex, "rendezvous SendVideo failed"); }
     }
 

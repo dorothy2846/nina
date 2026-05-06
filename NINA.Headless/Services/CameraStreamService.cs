@@ -9,15 +9,16 @@ using SixLabors.ImageSharp.PixelFormats;
 namespace NINA.Headless.Services;
 
 /// <summary>
-/// Live streaming for the camera tab. Step B1 uses the INDI driver's native video streaming
-/// path (CCD_VIDEO_STREAM=On, CCD_STREAM_ENCODER=MJPEG). The driver delivers pre-encoded
-/// JPEG frames on the CCD1 BLOB at ~8–30 FPS depending on sensor + exposure, so we forward
-/// bytes to every connected WebSocket client without touching the pixels. Later phases swap
-/// this for H.264 (server-side VideoToolbox) and WebRTC transport without changing the
-/// iOS-visible protocol if we keep this WS as a fallback.
+/// Live streaming for the camera tab. Drives the INDI driver's native video
+/// path (CCD_VIDEO_STREAM=On, CCD_STREAM_ENCODER=MJPEG); the driver delivers
+/// pre-encoded JPEG frames on the CCD1 BLOB. Each frame is debayered/WB'd in
+/// process, broadcast to JPEG WebSocket clients raw, and BMP-wrapped into
+/// <see cref="H264Transcoder"/> for H.264 fan-out (WebRTC + the H.264
+/// WebSocket fallback).
 ///
-/// Lifecycle: subscribing to the WS implicitly starts the stream; the last unsubscribe stops
-/// it. REST control endpoints let callers tune exposure / max FPS.
+/// Lifecycle: subscribing to the WS or attaching a WebRTC peer implicitly
+/// starts the stream; the last unsubscribe stops it. REST control endpoints
+/// let callers tune exposure, gain, ROI, and FPS cap.
 /// </summary>
 public class CameraStreamService : IAsyncDisposable
 {
@@ -26,11 +27,10 @@ public class CameraStreamService : IAsyncDisposable
     private readonly ILogger<CameraStreamService> _log;
     private readonly H264Transcoder _h264;
 
-    // Two client fan-outs sharing one upstream camera capture:
-    //   _jpegClients — raw MJPEG frames, low latency, higher bandwidth (Step B1 transport)
-    //   _h264Clients — ffmpeg-transcoded H.264 Annex B, lower bandwidth (Step B2 transport)
-    // Step B3 (WebRTC) will consume the same H.264 NALU stream as _h264Clients but over RTP
-    // instead of raw WebSocket bytes.
+    // Two WebSocket fan-outs sharing the upstream camera capture:
+    //   _jpegClients — debayered RGB JPEG frames (legacy fallback transport)
+    //   _h264Clients — Annex B H.264 NALs, raw start-code framed
+    // WebRTC peers consume the same H.264 stream from H264Transcoder over RTP.
     private readonly ConcurrentDictionary<Guid, WebSocket> _jpegClients = new();
     private readonly ConcurrentDictionary<Guid, WebSocket> _h264Clients = new();
     private readonly object _stateLock = new();
@@ -64,7 +64,6 @@ public class CameraStreamService : IAsyncDisposable
     private double _roiFracW = 1.0, _roiFracH = 1.0;
     private double _roiFracCX = 0.5, _roiFracCY = 0.5;
     private (int x, int y, int w, int h)? _savedSubFrame;
-    private CancellationTokenSource? _keepaliveCts;
     private double _maxFps = 20;
 
     // FPS tracking — rolling 1-second window of frame arrival times.
@@ -82,14 +81,14 @@ public class CameraStreamService : IAsyncDisposable
         _log = log;
         _h264 = h264;
         _h264.NaluReady += OnH264Nalu;
-        _h264.IvfEmitted += OnIvfEmitted;
+        _h264.NaluEmitted += OnNaluEmitted;
 
-        // Auto-start the live stream the moment a camera finishes connecting. Cuts
-        // first-viewer cold start by ~1–2 s — without this, the iOS app's first
-        // /rtc/offer is what triggers CCD_VIDEO_STREAM=On and then we wait for the
-        // sensor's first BLOB. Pre-warming the pipeline means ffmpeg already has
-        // frames flowing, so the only remaining cost on first connect is the WebRTC
-        // handshake + first VP8 keyframe (~0.5 s total).
+        // Auto-start the live stream the moment a camera finishes connecting.
+        // Cuts first-viewer cold start by ~1–2 s — without it, the iOS app's
+        // first /rtc/offer is what triggers CCD_VIDEO_STREAM=On and we then
+        // wait on the sensor's first BLOB. Pre-warming means ffmpeg already
+        // has frames flowing, so on first connect only the WebRTC handshake
+        // and first H.264 keyframe remain (~0.5 s).
         _indi.DeviceConnected += OnIndiDeviceConnected;
         _indi.ClientDisconnected += OnIndiClientDisconnected;
         _indi.ClientReconnected += OnIndiClientReconnected;
@@ -162,9 +161,9 @@ public class CameraStreamService : IAsyncDisposable
     }
 
     /// Milliseconds since the most recent frame was fully processed and
-    /// broadcast. The honest "how stale is what the user is looking at"
-    /// number — when the camera is occluded/stalled this grows monotonically
-    /// instead of being papered over by a keepalive replay.
+    /// broadcast. When the camera is occluded/stalled this grows
+    /// monotonically — the value is the honest "how stale is what the user
+    /// is looking at" number.
     public int? LastFrameAgeMs
     {
         get
@@ -194,12 +193,10 @@ public class CameraStreamService : IAsyncDisposable
     }
 
     /// <summary>Apply config + reload sensor settings WITHOUT touching the
-    /// ffmpeg pipeline. Earlier we called full StopAsync/StartAsync which
-    /// tore down ffmpeg + libvpx + filter graph and re-spawned them on every
-    /// ROI tap (1-2 s cold start visible to the user). The encoder doesn't
-    /// care that the camera is paused for 200 ms — keepalive loop holds the
-    /// last frame on the WebRTC peer, then the new sub-framed BLOBs land
-    /// straight into the existing encoder. Sub-second ROI swap.</summary>
+    /// ffmpeg pipeline. Full StopAsync/StartAsync tore down ffmpeg and
+    /// re-spawned it on every ROI tap (1-2 s cold start). Here the encoder
+    /// stays running across the brief sensor pause; new sub-framed BLOBs
+    /// land straight into the existing pipeline. Sub-second ROI swap.</summary>
     private CancellationTokenSource? _applyDebounceCts;
     private readonly object _applyLock = new();
     private const int ApplyDebounceMs = 350;
@@ -327,13 +324,11 @@ public class CameraStreamService : IAsyncDisposable
         _lastSensorCycleAt = DateTime.UtcNow;
 
         // Driver-level only: pause sensor, swap binning + sub-frame, resume.
-        // ffmpeg + WebRTC peers stay up the whole time. Keepalive loop pushes
-        // the last cached JPEG so the user sees a frozen-but-not-disconnected
-        // viewfinder for ~300-500 ms, then live frames at the new resolution.
-        // PlayerOne / ZWO drivers usually accept CCD_FRAME mid-stream — try
-        // that first (zero-stop swap, FireCapture-class snappiness). The
-        // OFF/ON dance is the conservative fallback if the driver actually
-        // ignores the live update; keeps the UX consistent across brands.
+        // ffmpeg + WebRTC peers stay up the whole time; the receiver freezes
+        // on its last decoded frame for ~300-500 ms, then live frames flow
+        // at the new resolution. PlayerOne / ZWO drivers usually accept
+        // CCD_FRAME mid-stream — try that first; the OFF/ON dance is the
+        // conservative fallback for drivers that ignore the live update.
         try
         {
             // Quick attempt: just push CCD_FRAME and see if the BLOB shrinks.
@@ -575,11 +570,6 @@ public class CameraStreamService : IAsyncDisposable
             _streamingDevice = null;
         }
 
-        // Tear down keepalive first so it can't race with the rest of stop.
-        try { _keepaliveCts?.Cancel(); } catch { }
-        _keepaliveCts = null;
-        _lastJpeg = null;
-
         var client = _indi.Client;
         if (client != null && device != null)
         {
@@ -619,8 +609,9 @@ public class CameraStreamService : IAsyncDisposable
 
     /// <summary>Driver-level pause: turn off CCD_VIDEO_STREAM so a still
     /// capture can take the sensor, but keep `_running` true so the
-    /// keepalive loop holds the encoder + WebRTC pipeline alive on the
-    /// last cached frame. User sees a held image, never a dead pipeline.</summary>
+    /// encoder + WebRTC peers stay attached. The receiver freezes on its
+    /// last decoded frame for the duration of the capture rather than
+    /// disconnecting.</summary>
     public async Task PauseSensorAsync(CancellationToken ct = default)
     {
         if (!_running) return;
@@ -642,9 +633,7 @@ public class CameraStreamService : IAsyncDisposable
     }
 
     /// <summary>Driver-level resume after a capture finishes — flip
-    /// CCD_VIDEO_STREAM back on and BLOBs start flowing again. The
-    /// keepalive loop quietly stops re-pushing the cached frame because
-    /// the per-frame timestamps catch up.</summary>
+    /// CCD_VIDEO_STREAM back on and BLOBs start flowing again.</summary>
     public async Task ResumeSensorAsync(CancellationToken ct = default)
     {
         if (!_running) return;
@@ -659,8 +648,6 @@ public class CameraStreamService : IAsyncDisposable
         }
         catch (Exception ex) { _log.LogWarning(ex, "CameraStream: sensor resume failed"); }
     }
-
-    private byte[]? _lastJpeg;
 
     /// Resolved at stream-start by inspecting the connected driver's actual
     /// properties. (propertyName, elementName, scaleToDriverUnits) — scale
@@ -741,45 +728,38 @@ public class CameraStreamService : IAsyncDisposable
 
     /// <summary>Per-frame timing samples for the latency probe. Each entry
     /// records when the frame entered each pipeline stage so /api/v1/
-    /// diagnostics/streamLatency can show "capture→jpeg=12ms, jpeg→ffmpeg=
-    /// 3ms, ffmpeg encode=140ms" decomposition. Bounded ring buffer (last 60
-    /// frames) so it can't leak. `IvfEmitted` is filled in asynchronously
-    /// when the H264Transcoder reports an output packet — paired FIFO so
-    /// frames map 1:1 in order (drop-tolerant since we use single-flight).</summary>
+    /// diagnostics/streamLatency can show capture→encoder→emit decomposition.
+    /// Bounded ring buffer (last 60 frames). <see cref="EncoderEmitted"/> is
+    /// filled in asynchronously when the H264Transcoder reports a NAL —
+    /// paired FIFO so frames map 1:1 in order (drop-tolerant since we use
+    /// single-flight push).</summary>
     public sealed class FrameTiming
     {
         public long FrameNumber;
         public DateTime BlobReceived;
         public DateTime ProcessingDone;
         public DateTime PushedToFfmpeg;
-        public DateTime? IvfEmitted;
+        public DateTime? EncoderEmitted;
     }
     private readonly System.Collections.Concurrent.ConcurrentQueue<FrameTiming> _timings = new();
-    /// FIFO of frames pushed to ffmpeg but not yet correlated with an IVF
-    /// emit. On each ffmpeg IVF emission we dequeue the head and stamp its
-    /// IvfEmitted time. Bounded by frame drops on the encoder side.
     private readonly System.Collections.Concurrent.ConcurrentQueue<FrameTiming> _pendingEncode = new();
     private long _frameCounter;
     public IReadOnlyList<FrameTiming> RecentFrameTimings => _timings.ToArray();
 
-    /// Pair the next IVF emit with the head of `_pendingEncode` (FIFO) so we
-    /// can compute encode latency = T_emit - T_push. ffmpeg drops frames
-    /// when encoder falls behind, but with `-fps_mode passthrough` and our
-    /// single-flight upstream, the FIFO mapping is reliable in practice.
-    private long _ivfEmitCount;
-    private long _ivfDequeueMissCount;
-    private void OnIvfEmitted(DateTime emittedAt)
+    private long _naluEmitCount;
+    private long _naluDequeueMissCount;
+    private void OnNaluEmitted(DateTime emittedAt)
     {
-        var n = System.Threading.Interlocked.Increment(ref _ivfEmitCount);
+        var n = System.Threading.Interlocked.Increment(ref _naluEmitCount);
         if (_pendingEncode.TryDequeue(out var t))
         {
-            t.IvfEmitted = emittedAt;
+            t.EncoderEmitted = emittedAt;
         }
         else
         {
-            System.Threading.Interlocked.Increment(ref _ivfDequeueMissCount);
+            System.Threading.Interlocked.Increment(ref _naluDequeueMissCount);
         }
-        if (n % 30 == 1) _log.LogInformation("OnIvfEmitted fired: count={N}, pending={P}, miss={M}", n, _pendingEncode.Count, _ivfDequeueMissCount);
+        if (n % 30 == 1) _log.LogInformation("OnNaluEmitted fired: count={N}, pending={P}, miss={M}", n, _pendingEncode.Count, _naluDequeueMissCount);
     }
 
     private void OnBlobReceived(string device, string property, string element, byte[] bytes, string? format)
@@ -849,7 +829,6 @@ public class CameraStreamService : IAsyncDisposable
                     jpegBytes = bytes;
                 }
             }
-            _lastJpeg = jpegBytes ?? bytes;
             var processingDone = DateTime.UtcNow;
             if (jpegBytes != null) _ = BroadcastJpegAsync(jpegBytes);
 
@@ -1092,10 +1071,6 @@ public class CameraStreamService : IAsyncDisposable
             rgb?.Dispose();
         }
     }
-
-    // KeepaliveLoopAsync removed — re-pushing cached frames hid stuck-driver
-    // state behind a "looks alive" stream. The watchdog + driver-hung event
-    // surface those failures honestly now.
 
     private void OnH264Nalu(byte[] nalu)
     {

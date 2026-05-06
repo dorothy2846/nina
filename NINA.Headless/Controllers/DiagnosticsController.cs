@@ -47,8 +47,8 @@ public class DiagnosticsController : ControllerBase
             ageMs = (int)(now - t.BlobReceived).TotalMilliseconds,
             captureMs = (int)(t.ProcessingDone - t.BlobReceived).TotalMilliseconds,
             queueMs = (int)(t.PushedToFfmpeg - t.ProcessingDone).TotalMilliseconds,
-            encodeMs = t.IvfEmitted.HasValue
-                ? (int)(t.IvfEmitted.Value - t.PushedToFfmpeg).TotalMilliseconds
+            encodeMs = t.EncoderEmitted.HasValue
+                ? (int)(t.EncoderEmitted.Value - t.PushedToFfmpeg).TotalMilliseconds
                 : (int?)null,
         }).ToArray();
 
