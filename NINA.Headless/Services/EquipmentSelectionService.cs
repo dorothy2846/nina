@@ -48,6 +48,24 @@ public class EquipmentSelectionService
     {
         lock (_lock)
         {
+            // Expiry sweep on read: UpdateProviderDevices only evicts when a
+            // provider pushes a fresh list, which never happens if a stopped
+            // driver was the last INDI traffic source — the stale entry would
+            // otherwise outlive StickyGrace forever. The selected device is
+            // exempt so an active session can't lose its device row mid-use.
+            var now = DateTime.UtcNow;
+            var lastSeen = _lastSeen[kind];
+            var selectedId = _state[kind].SelectedId;
+            foreach (var key in _devices[kind].Keys.ToList())
+            {
+                if (key == selectedId) continue;
+                if (lastSeen.TryGetValue(key, out var seen) && now - seen > StickyGrace)
+                {
+                    _devices[kind].Remove(key);
+                    lastSeen.Remove(key);
+                }
+            }
+
             return _devices[kind].Values
                 .OrderBy(d => d.Name)
                 .ToList();

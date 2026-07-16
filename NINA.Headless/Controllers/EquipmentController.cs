@@ -133,6 +133,82 @@ public class EquipmentController : ControllerBase
         });
     }
 
+    // ----- USB plug-and-play -----
+
+    /// <summary>Everything currently on the USB bus, classified against the
+    /// INDI driver catalog. Serial adapters carry isSerialAdapter=true — the
+    /// app offers a mount-driver picker for those (the adapter chip cannot
+    /// identify what is behind it).</summary>
+    [HttpGet("usb")]
+    public IActionResult GetUsbDevices([FromServices] Services.Usb.UsbAutoDetectService usb, [FromServices] IndiServerManager indiServer)
+    {
+        var running = indiServer.RunningDrivers;
+        var devices = usb.CurrentDevices.Select(d => new
+        {
+            vendorId = d.Device.VendorId,
+            productId = d.Device.ProductId,
+            product = d.Device.Product,
+            vendor = d.Device.Vendor,
+            vendorLabel = d.VendorLabel,
+            suggestedDrivers = d.SuggestedDrivers,
+            driversRunning = d.SuggestedDrivers.All(s => running.Contains(s)) && d.SuggestedDrivers.Count > 0,
+            isSerialAdapter = d.IsSerialAdapter,
+        });
+        return Ok(new { devices });
+    }
+
+    /// <summary>Running driver list + the manual-add catalog (mounts behind
+    /// serial adapters, simulators for testing).</summary>
+    [HttpGet("drivers")]
+    public IActionResult GetDrivers([FromServices] IndiServerManager indiServer)
+    {
+        return Ok(new
+        {
+            running = indiServer.RunningDrivers,
+            available = Services.Usb.IndiDriverCatalog.ManualDrivers.Select(m => new { driver = m.Driver, label = m.Label }),
+        });
+    }
+
+    public record DriverRequest(string? Driver);
+
+    [HttpPost("drivers/start")]
+    public async Task<IActionResult> StartDriver([FromBody] DriverRequest? request, [FromServices] IndiServerManager indiServer)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Driver))
+            return BadRequest(new { success = false, message = "driver is required" });
+        try
+        {
+            var started = await indiServer.StartDriverAsync(request.Driver, HttpContext.RequestAborted);
+            return Ok(new { success = true, started, message = started ? $"Driver '{request.Driver}' started" : $"Driver '{request.Driver}' was already running" });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(503, new { success = false, message = ex.Message });
+        }
+    }
+
+    [HttpPost("drivers/stop")]
+    public async Task<IActionResult> StopDriver([FromBody] DriverRequest? request, [FromServices] IndiServerManager indiServer)
+    {
+        if (string.IsNullOrWhiteSpace(request?.Driver))
+            return BadRequest(new { success = false, message = "driver is required" });
+        try
+        {
+            var stopped = await indiServer.StopDriverAsync(request.Driver, HttpContext.RequestAborted);
+            return stopped
+                ? Ok(new { success = true, message = $"Driver '{request.Driver}' stopped" })
+                : BadRequest(new { success = false, message = $"'{request.Driver}' is not a runtime-started driver (base drivers are configured via NINA_INDI_DRIVERS)" });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { success = false, message = ex.Message });
+        }
+    }
+
     // ----- Device rescan / INDI server restart -----
     //
     // Two escalating levels for "my camera/scope isn't showing up":

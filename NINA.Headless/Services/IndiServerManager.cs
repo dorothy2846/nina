@@ -26,8 +26,21 @@ public class IndiServerManager : BackgroundService
     /// mount or guider off their in-progress operations.</summary>
     private string? _fifoPath;
 
+    /// <summary>All drivers currently expected to be running: the base launch
+    /// list plus any started at runtime (USB auto-detect, manual add from the
+    /// app). Dynamic entries survive an indiserver restart — StartServer folds
+    /// them into the relaunch arguments.</summary>
+    private readonly object _driversLock = new();
+    private readonly List<string> _baseDrivers = new();
+    private readonly HashSet<string> _dynamicDrivers = new();
+
     public string Host { get; } = Environment.GetEnvironmentVariable("NINA_INDI_HOST") ?? "localhost";
     public int Port { get; } = int.TryParse(Environment.GetEnvironmentVariable("NINA_INDI_PORT"), out var p) ? p : 7624;
+
+    public IReadOnlyList<string> RunningDrivers
+    {
+        get { lock (_driversLock) return _baseDrivers.Concat(_dynamicDrivers).Distinct().ToList(); }
+    }
 
     public IndiServerManager(ILogger<IndiServerManager> log)
     {
@@ -61,9 +74,17 @@ public class IndiServerManager : BackgroundService
                  ?? (File.Exists("/opt/homebrew/bin/indiserver") ? "/opt/homebrew/bin/indiserver" : "indiserver");
 
         // Default driver set: real hardware drivers commonly used on this rig.
-        // Add more by setting NINA_INDI_DRIVERS env var.
-        var drivers = Environment.GetEnvironmentVariable("NINA_INDI_DRIVERS")
+        // Add more by setting NINA_INDI_DRIVERS env var; USB auto-detect and
+        // the app's manual add start further drivers at runtime via the FIFO.
+        var baseList = Environment.GetEnvironmentVariable("NINA_INDI_DRIVERS")
                      ?? "indi_playerone_ccd indi_lx200am5 indi_asi_ccd indi_asi_focuser indi_asi_wheel";
+        string drivers;
+        lock (_driversLock)
+        {
+            _baseDrivers.Clear();
+            _baseDrivers.AddRange(baseList.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            drivers = string.Join(' ', _baseDrivers.Concat(_dynamicDrivers).Distinct());
+        }
 
         // FIFO for runtime driver management. Must be mkfifo'd before indiserver launches
         // since indiserver opens it for reading at startup. We regenerate each launch so a
@@ -195,6 +216,70 @@ public class IndiServerManager : BackgroundService
         await WriteLineAsync($"stop {driverName}");
         await Task.Delay(500, ct);
         await WriteLineAsync($"start {driverName}");
+    }
+
+    /// <summary>Start one more driver in the running indiserver without touching
+    /// the others (USB auto-detect / manual add from the app). Returns false if
+    /// the driver is already in the running set. The driver is remembered so an
+    /// indiserver restart relaunches it too.</summary>
+    public async Task<bool> StartDriverAsync(string driverName, CancellationToken ct)
+    {
+        ValidateDriverName(driverName);
+        lock (_driversLock)
+        {
+            if (_baseDrivers.Contains(driverName) || _dynamicDrivers.Contains(driverName))
+                return false;
+            _dynamicDrivers.Add(driverName);
+        }
+        try
+        {
+            await WriteFifoAsync($"start {driverName}", ct);
+            _log.LogInformation("indiserver: started driver {Driver} via FIFO", driverName);
+            return true;
+        }
+        catch
+        {
+            lock (_driversLock) _dynamicDrivers.Remove(driverName);
+            throw;
+        }
+    }
+
+    /// <summary>Stop a runtime-started driver. Base-list drivers are refused —
+    /// they exist because this rig depends on them; stopping those is what
+    /// NINA_INDI_DRIVERS is for.</summary>
+    public async Task<bool> StopDriverAsync(string driverName, CancellationToken ct)
+    {
+        ValidateDriverName(driverName);
+        lock (_driversLock)
+        {
+            if (!_dynamicDrivers.Contains(driverName))
+                return false;
+            _dynamicDrivers.Remove(driverName);
+        }
+        await WriteFifoAsync($"stop {driverName}", ct);
+        _log.LogInformation("indiserver: stopped driver {Driver} via FIFO", driverName);
+        return true;
+    }
+
+    private static void ValidateDriverName(string driverName)
+    {
+        if (string.IsNullOrWhiteSpace(driverName))
+            throw new ArgumentException("driverName required", nameof(driverName));
+        if (driverName.Any(c => !(char.IsLetterOrDigit(c) || c == '_' || c == '-')))
+            throw new ArgumentException($"Invalid driver name '{driverName}'", nameof(driverName));
+    }
+
+    /// Opening a FIFO for write blocks until a reader (indiserver) opens it —
+    /// guard against a crashed indiserver by requiring the FIFO to exist.
+    private async Task WriteFifoAsync(string line, CancellationToken ct)
+    {
+        if (_fifoPath == null || !File.Exists(_fifoPath))
+            throw new InvalidOperationException("indiserver FIFO not available (server not started yet?)");
+        await using var fs = new FileStream(_fifoPath, FileMode.Open, FileAccess.Write, FileShare.Read,
+            bufferSize: 512, options: FileOptions.Asynchronous);
+        var bytes = System.Text.Encoding.UTF8.GetBytes(line + "\n");
+        await fs.WriteAsync(bytes, ct);
+        await fs.FlushAsync(ct);
     }
 
     /// <summary>Nuclear option for device discovery: kill the entire indiserver child process

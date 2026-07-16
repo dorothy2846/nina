@@ -82,6 +82,9 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Serv
 builder.Services.AddSingleton<Phd2Service>();
 builder.Services.AddSingleton<IndiServerManager>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiServerManager>());
+// USB plug-and-play: watches the bus, auto-starts matching INDI drivers.
+builder.Services.AddSingleton<NINA.Headless.Services.Usb.UsbAutoDetectService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.Usb.UsbAutoDetectService>());
 builder.Services.AddSingleton<IndiDiscoveryService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<IndiDiscoveryService>());
 // Bridges INDI device state into NINA mediators so every IDeviceConsumer
