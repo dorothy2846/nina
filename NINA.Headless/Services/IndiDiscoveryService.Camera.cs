@@ -105,7 +105,33 @@ public partial class IndiDiscoveryService
             ("RECORD_OFF",         false),
         };
         await client.SetSwitchManyAsync(deviceName, "RECORD_STREAM", switches, ct);
+
+        // Throttle the preview while recording: the SER file gets every frame
+        // regardless (the recorder taps the stream driver-side), but each BLOB
+        // sent our way costs parse CPU that planetary-rate capture can't spare.
+        // Best-effort — remember the old cap so StopRecording restores it.
+        try
+        {
+            var dev = client.GetDevice(deviceName);
+            if (dev != null && dev.Properties.TryGetValue("LIMITS", out var limits))
+            {
+                var current = limits["LIMITS_PREVIEW_FPS"]?.AsDouble;
+                if (current is > RecordingPreviewFps)
+                {
+                    lock (_previewFpsLock) _savedPreviewFps[deviceName] = current.Value;
+                    await client.SetNumberAsync(deviceName, "LIMITS", "LIMITS_PREVIEW_FPS", RecordingPreviewFps, ct);
+                    _log.LogInformation("Recording: preview capped to {Fps} fps (was {Prev})", RecordingPreviewFps, current);
+                }
+            }
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Recording: preview-fps cap failed (driver may not expose LIMITS)"); }
     }
+
+    /// Preview BLOB rate while a recording runs. Enough for framing; leaves
+    /// the CPU to the driver's SER writer.
+    private const double RecordingPreviewFps = 5;
+    private readonly object _previewFpsLock = new();
+    private readonly Dictionary<string, double> _savedPreviewFps = new();
 
     public async Task StopRecordingAsync(string deviceName, CancellationToken ct)
     {
@@ -115,13 +141,26 @@ public partial class IndiDiscoveryService
             ("RECORD_ON", false), ("RECORD_DURATION_ON", false),
             ("RECORD_FRAME_ON", false), ("RECORD_OFF", true)
         }, ct);
+
+        // Restore the preview cap StartRecordingAsync lowered.
+        double saved;
+        lock (_previewFpsLock)
+        {
+            if (!_savedPreviewFps.Remove(deviceName, out saved)) return;
+        }
+        try
+        {
+            await client.SetNumberAsync(deviceName, "LIMITS", "LIMITS_PREVIEW_FPS", saved, ct);
+            _log.LogInformation("Recording: preview cap restored to {Fps} fps", saved);
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Recording: preview-fps restore failed"); }
     }
 
-    public (bool running, string? activeSwitch, string? dir, string? filename) GetRecordingStatus(string deviceName)
+    public (bool running, string? activeSwitch, string? dir, string? filename, double? captureFps) GetRecordingStatus(string deviceName)
     {
         var client = _client;
         var dev = client?.GetDevice(deviceName);
-        if (dev == null) return (false, null, null, null);
+        if (dev == null) return (false, null, null, null, null);
 
         string? active = null;
         if (dev.Properties.TryGetValue("RECORD_STREAM", out var rs))
@@ -135,7 +174,13 @@ public partial class IndiDiscoveryService
             dir = rf["RECORD_FILE_DIR"]?.Value;
             file = rf["RECORD_FILE_NAME"]?.Value;
         }
-        return (active != null, active, dir, file);
+        // Driver-side capture rate (StreamManager's FPS vector). This is the
+        // rate frames hit the SER file — the client BLOB rate is preview-capped
+        // by LIMITS_PREVIEW_FPS and says nothing about the recording.
+        double? captureFps = null;
+        if (dev.Properties.TryGetValue("FPS", out var fps))
+            captureFps = fps["EST_FPS"]?.AsDouble;
+        return (active != null, active, dir, file, captureFps);
     }
 
     // ----- Frame type / calibration (CCD_FRAME_TYPE) -----

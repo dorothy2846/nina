@@ -169,10 +169,18 @@ public partial class CameraController
         if (selected?.Provider != EquipmentProvider.Indi)
             return Ok(new { running = false });
         var s = _indi.GetRecordingStatus(selected.UniqueId);
-        // Camera-side BLOB delivery rate — this is the rate the SER file is actually
-        // being written at, as opposed to the (capped) ffmpeg/WebRTC transmission fps
-        // the viewfinder shows. Surfacing this lets the user judge whether their
-        // exposure / gain settings are giving them the planetary fps they want.
-        return Ok(new { running = s.running, mode = s.activeSwitch, dir = s.dir, filename = s.filename, fps = _stream.LastFps });
+        // fps = the driver's own capture-rate estimate (FPS.EST_FPS) — the rate
+        // frames actually hit the SER file. The BLOB rate we observe client-side
+        // is preview-capped by LIMITS_PREVIEW_FPS (hard-lowered to 5 during
+        // recording) and would badly under-report planetary capture rates.
+        return Ok(new
+        {
+            running = s.running,
+            mode = s.activeSwitch,
+            dir = s.dir,
+            filename = s.filename,
+            fps = s.captureFps ?? _stream.LastFps,
+            previewFps = _stream.LastFps
+        });
     }
 }
