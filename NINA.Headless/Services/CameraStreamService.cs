@@ -151,6 +151,12 @@ public partial class CameraStreamService : IAsyncDisposable
     /// reliably but stalls if a second hits within ~1.5 s.
     private DateTime _lastSensorCycleAt = DateTime.MinValue;
     private const int MinCycleIntervalMs = 1500;
+    /// Full stop→start pacing. Measured: three full stream cycles inside
+    /// ~24 s USB-disconnects the PlayerOne entirely (CONNECT drops to Off);
+    /// one cycle is reliably fine. 15 s spacing caps any 24 s window at two
+    /// cycles (0 s, 15 s, 30 s…) with margin — StartAsync delays (never
+    /// rejects) until the cooldown has elapsed.
+    private const int MinStopStartIntervalMs = 15_000;
 
     /// Snapshot of the configuration at the moment ApplyToDriverAsync runs.
     /// Compared against the live `_*` fields to decide what changed since

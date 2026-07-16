@@ -70,6 +70,21 @@ public partial class CameraStreamService
             if (_running) return;
         }
 
+        // Rapid-cycle protection: pace full stop→start cycles against the
+        // shared sensor-cycle clock (also stamped by the ROI/binning apply
+        // path). The request still succeeds — it just waits out the budget.
+        var sinceCycle = (DateTime.UtcNow - _lastSensorCycleAt).TotalMilliseconds;
+        if (sinceCycle < MinStopStartIntervalMs)
+        {
+            var waitMs = MinStopStartIntervalMs - (int)sinceCycle;
+            _log.LogInformation("CameraStream: pacing sensor re-arm by {Ms}ms (rapid-cycle protection)", waitMs);
+            await Task.Delay(waitMs, ct);
+            lock (_stateLock)
+            {
+                if (_running) return;
+            }
+        }
+
         // Start the H.264 transcoder regardless of which transport subscribes first — negligible
         // cost when no H.264 clients connect, and the ffmpeg pipeline is ready when they do.
         _h264.Start(targetFps: (int)Math.Round(_maxFps), crf: 26);
@@ -165,6 +180,7 @@ public partial class CameraStreamService
 
         await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
             new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
+        _lastSensorCycleAt = DateTime.UtcNow;
 
         lock (_stateLock)
         {
@@ -288,6 +304,7 @@ public partial class CameraStreamService
             {
                 await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
                     new[] { ("STREAM_ON", false), ("STREAM_OFF", true) }, ct);
+                _lastSensorCycleAt = DateTime.UtcNow;
             }
             catch (Exception ex) { _log.LogWarning(ex, "CameraStream: STREAM_OFF failed"); }
 
@@ -335,6 +352,9 @@ public partial class CameraStreamService
         {
             await client.SetSwitchManyAsync(device, "CCD_VIDEO_STREAM",
                 new[] { ("STREAM_ON", true), ("STREAM_OFF", false) }, ct);
+            // Stamp the shared cycle clock (no delay here — pausing a still
+            // capture must stay fast) so following full cycles are paced.
+            _lastSensorCycleAt = DateTime.UtcNow;
             _log.LogInformation("CameraStream: sensor resumed");
         }
         catch (Exception ex) { _log.LogWarning(ex, "CameraStream: sensor resume failed"); }

@@ -10,13 +10,6 @@ namespace NINA.Headless.Controllers;
 public class EquipmentController : ControllerBase
 {
     private readonly NinaStateService _state;
-    private readonly ICameraMediator _camera;
-    private readonly ITelescopeMediator _telescope;
-    private readonly IGuiderMediator _guider;
-    private readonly IFocuserMediator _focuser;
-    private readonly IFilterWheelMediator _filterWheel;
-    private readonly IRotatorMediator _rotator;
-    private readonly IDomeMediator _dome;
     private readonly ISafetyMonitorMediator _safety;
     private readonly EquipmentSelectionService _equipment;
     private readonly IndiDiscoveryService _indi;
@@ -26,13 +19,6 @@ public class EquipmentController : ControllerBase
 
     public EquipmentController(
         NinaStateService state,
-        ICameraMediator camera,
-        ITelescopeMediator telescope,
-        IGuiderMediator guider,
-        IFocuserMediator focuser,
-        IFilterWheelMediator filterWheel,
-        IRotatorMediator rotator,
-        IDomeMediator dome,
         ISafetyMonitorMediator safety,
         EquipmentSelectionService equipment,
         IndiDiscoveryService indi,
@@ -41,13 +27,6 @@ public class EquipmentController : ControllerBase
         IndiDriverWatchdog watchdog)
     {
         _state = state;
-        _camera = camera;
-        _telescope = telescope;
-        _guider = guider;
-        _focuser = focuser;
-        _filterWheel = filterWheel;
-        _rotator = rotator;
-        _dome = dome;
         _safety = safety;
         _equipment = equipment;
         _indi = indi;
@@ -152,108 +131,6 @@ public class EquipmentController : ControllerBase
             weather = AsList(_equipment.GetAvailable(DeviceKind.Weather)),
             switches = AsList(_equipment.GetAvailable(DeviceKind.Switch))
         });
-    }
-
-    [HttpPost("connect-all")]
-    public async Task<IActionResult> ConnectAll([FromBody] ConnectAllRequest? request)
-    {
-        var results = new Dictionary<string, object>();
-
-        var cameraConnected = await _camera.Connect();
-        var cameraInfo = _state.CameraMediator.GetInfo();
-        results["camera"] = new
-        {
-            success = cameraConnected,
-            name = cameraInfo?.Name ?? request?.CameraId ?? "camera",
-            message = cameraConnected ? "Connected" : "Failed to connect"
-        };
-
-        var telescopeConnected = await _telescope.Connect();
-        var telescopeInfo = _state.TelescopeMediator.GetInfo();
-        results["telescope"] = new
-        {
-            success = telescopeConnected,
-            name = telescopeInfo?.Name ?? request?.TelescopeId ?? "telescope",
-            message = telescopeConnected ? "Connected" : "Failed to connect"
-        };
-
-        var focuserConnected = await _focuser.Connect();
-        var focuserInfo = _focuser.GetInfo();
-        results["focuser"] = new
-        {
-            success = focuserConnected,
-            name = focuserInfo?.Name ?? request?.FocuserId ?? "focuser",
-            message = focuserConnected ? "Connected" : "Failed to connect"
-        };
-
-        var filterWheelConnected = await _filterWheel.Connect();
-        var filterWheelInfo = _filterWheel.GetInfo();
-        results["filterWheel"] = new
-        {
-            success = filterWheelConnected,
-            name = filterWheelInfo?.Name ?? request?.FilterWheelId ?? "filterwheel",
-            message = filterWheelConnected ? "Connected" : "Failed to connect"
-        };
-
-        var guiderConnected = await _guider.Connect();
-        var guiderInfo = _state.GuiderMediator.GetInfo();
-        results["guider"] = new
-        {
-            success = guiderConnected,
-            name = guiderInfo?.Name ?? request?.GuiderId ?? "guider",
-            message = guiderConnected ? "Connected" : "Failed to connect"
-        };
-
-        var rotatorConnected = await _rotator.Connect();
-        var rotatorInfo = _rotator.GetInfo();
-        results["rotator"] = new
-        {
-            success = rotatorConnected,
-            name = rotatorInfo?.Name ?? request?.RotatorId ?? "rotator",
-            message = rotatorConnected ? "Connected" : "Failed to connect"
-        };
-
-        var domeConnected = await _dome.Connect();
-        var domeInfo = _dome.GetInfo();
-        results["dome"] = new
-        {
-            success = domeConnected,
-            name = domeInfo?.Name ?? request?.DomeId ?? "dome",
-            message = domeConnected ? "Connected" : "Failed to connect"
-        };
-
-        _state.NotifyStateChanged("equipment", _state.BuildEquipmentStatus());
-        return Ok(new { results });
-    }
-
-    [HttpPost("disconnect-all")]
-    public async Task<IActionResult> DisconnectAll()
-    {
-        var results = new Dictionary<string, object>();
-
-        await _state.CameraMediator.Disconnect();
-        results["camera"] = new { success = true, message = "Disconnected" };
-
-        await _state.TelescopeMediator.Disconnect();
-        results["telescope"] = new { success = true, message = "Disconnected" };
-
-        await _focuser.Disconnect();
-        results["focuser"] = new { success = true, message = "Disconnected" };
-
-        await _filterWheel.Disconnect();
-        results["filterWheel"] = new { success = true, message = "Disconnected" };
-
-        await _state.GuiderMediator.Disconnect();
-        results["guider"] = new { success = true, message = "Disconnected" };
-
-        await _rotator.Disconnect();
-        results["rotator"] = new { success = true, message = "Disconnected" };
-
-        await _dome.Disconnect();
-        results["dome"] = new { success = true, message = "Disconnected" };
-
-        _state.NotifyStateChanged("equipment", _state.BuildEquipmentStatus());
-        return Ok(new { results });
     }
 
     // ----- Device rescan / INDI server restart -----

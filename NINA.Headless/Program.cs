@@ -111,6 +111,9 @@ builder.Services.AddSingleton<WebRTCService>();
 builder.Services.AddSingleton<FlatWizardService>();
 builder.Services.AddSingleton<CalibrationBatchService>();
 builder.Services.AddSingleton<CalibrationLibrary>();
+// PolarAlignmentController injects this; without the registration every
+// polar-alignment request died with a DI 500 before reaching the action.
+builder.Services.AddSingleton(new NINA.Headless.Services.HeadlessAstapSolver(NINA.Headless.Services.PlatformPaths.AstapPath));
 builder.Services.AddSingleton<LiveStackService>();
 builder.Services.AddHostedService<EquipmentStatusBroadcaster>();
 builder.Services.AddHostedService<AlpacaDiscoveryService>();

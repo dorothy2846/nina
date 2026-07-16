@@ -82,14 +82,16 @@ namespace NINA.WPF.Base.Mediator {
         /// </summary>
         /// <returns></returns>
         public Task<bool> Connect() {
-            return handler?.Connect();
+            // No handler is registered in the headless build — return a
+            // completed false rather than a null Task (await null → NRE).
+            return handler?.Connect() ?? Task.FromResult(false);
         }
 
         /// <summary>
         /// Disconnect the device
         /// </summary>
         public Task Disconnect() {
-            return handler?.Disconnect();
+            return handler?.Disconnect() ?? Task.CompletedTask;
         }
 
         /// <summary>
