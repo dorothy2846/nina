@@ -2,8 +2,8 @@ using NINA.Equipment.Equipment.MyCamera;
 using NINA.Equipment.Equipment.MyTelescope;
 using NINA.Equipment.Equipment.MyFocuser;
 using NINA.Equipment.Interfaces.Mediator;
-// Aliased to avoid conflicts with local Headless types (Models/DomeInfo.cs,
-// SimulatorService.FilterWheelInfo) that share the same simple name.
+// Aliased to avoid conflicts with local Headless types (Models/DomeInfo.cs)
+// that share the same simple name.
 using FilterWheelInfo = NINA.Equipment.Equipment.MyFilterWheel.FilterWheelInfo;
 using RotatorInfo = NINA.Equipment.Equipment.MyRotator.RotatorInfo;
 using DomeInfo = NINA.Equipment.Equipment.MyDome.DomeInfo;

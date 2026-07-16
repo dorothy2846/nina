@@ -70,7 +70,10 @@ public class PlateSolvingController : ControllerBase
         }
 
         // 3. Run the Robust City-Solver ASTAP Pipeline
-        var focalLength = 400.0; // In reality, fetch from _state.Profile.Telescope.FocalLength
+        // Profile-synced focal length when the phone has pushed one; 400 mm
+        // FOV hint otherwise (wrong hint slows the solve, doesn't corrupt it).
+        var profileFl = ProfileSyncController.ActiveCloudProfile?.TelescopeFocalLength ?? 0;
+        var focalLength = profileFl > 0 ? profileFl : 400.0;
         var pixelSize = camera?.PixelSize ?? 3.76;
         
         var solveResult = await solver.SolveAsync(

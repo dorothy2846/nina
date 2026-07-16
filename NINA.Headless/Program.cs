@@ -112,7 +112,6 @@ builder.Services.AddSingleton<FlatWizardService>();
 builder.Services.AddSingleton<CalibrationBatchService>();
 builder.Services.AddSingleton<CalibrationLibrary>();
 builder.Services.AddSingleton<LiveStackService>();
-builder.Services.AddHostedService<SimulatorService>();
 builder.Services.AddHostedService<EquipmentStatusBroadcaster>();
 builder.Services.AddHostedService<AlpacaDiscoveryService>();
 
@@ -192,10 +191,6 @@ app.MapPost("/api/v1/rtc/close/{peerId}", async (string peerId, NINA.Headless.Se
     await rtc.ClosePeerAsync(peerId);
     return Results.Ok(new { success = true });
 });
-
-// Quick browser-based test page — lets us verify the server's WebRTC pipeline before
-// building the iOS client. Served at /rtc-test.html.
-app.MapGet("/rtc-test.html", () => Results.Content(WebRTCTestPage.Html, "text/html"));
 
 // Health check endpoint
 app.MapGet("/api/v1/health", () => new {

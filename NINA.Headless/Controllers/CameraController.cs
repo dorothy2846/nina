@@ -138,9 +138,11 @@ public class CameraController : ControllerBase
     [HttpPost("connect")]
     public async Task<IActionResult> Connect([FromBody] ConnectRequest? request)
     {
-        var deviceId = string.IsNullOrWhiteSpace(request?.DeviceId)
-            ? CameraSelectionService.SimulatorId
-            : request.DeviceId;
+        if (string.IsNullOrWhiteSpace(request?.DeviceId))
+        {
+            return BadRequest(new { success = false, message = "deviceId is required" });
+        }
+        var deviceId = request.DeviceId;
 
         var success = _cameraSelection.Connect(deviceId);
         if (!success)

@@ -6,8 +6,6 @@ namespace NINA.Headless.Services;
 /// </summary>
 public class CameraSelectionService
 {
-    public const string SimulatorId = "simulator-builtin";  // legacy id, no longer surfaced
-
     private readonly EquipmentSelectionService _equipment;
 
     public CameraSelectionService(EquipmentSelectionService equipment)

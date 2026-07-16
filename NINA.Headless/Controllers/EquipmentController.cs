@@ -81,7 +81,7 @@ public class EquipmentController : ControllerBase
     {
         return Ok(new
         {
-            camera = _state.BuildCameraStatus(),  // already gated by CameraSelectionService in SimulatorService
+            camera = _state.BuildCameraStatus(),  // fed by IndiToMediatorBridge's 1 Hz camera broadcast
             telescope = StatusOf(DeviceKind.Telescope, () => _indi.BuildTelescopeStatus(_equipment.GetSelected(DeviceKind.Telescope)!.UniqueId)),
             focuser = StatusOf(DeviceKind.Focuser, () => _indi.BuildFocuserStatus(_equipment.GetSelected(DeviceKind.Focuser)!.UniqueId)),
             filterWheel = StatusOf(DeviceKind.FilterWheel, () => _indi.BuildFilterWheelStatus(_equipment.GetSelected(DeviceKind.FilterWheel)!.UniqueId)),

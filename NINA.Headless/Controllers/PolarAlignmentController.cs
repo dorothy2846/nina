@@ -43,6 +43,17 @@ public class PolarAlignmentController : ControllerBase
     [HttpPost("start")]
     public IActionResult Start()
     {
+        // Polar alignment math is meaningless without the real site latitude —
+        // refuse to start rather than silently compute against a wrong location.
+        if (ResolveSiteCoordinates() == null)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                message = "Site coordinates unavailable: mount reports no GEOGRAPHIC_COORD and no equipment profile has been synced."
+            });
+        }
+
         lock (SyncRoot)
         {
             if (_running) return BadRequest(new { success = false, message = "Already running" });
@@ -71,6 +82,8 @@ public class PolarAlignmentController : ControllerBase
 
         try
         {
+            var (latitude, longitude) = ResolveSiteCoordinates()
+                ?? throw new InvalidOperationException("Site coordinates unavailable");
             for (int i = 0; i < 3; i++)
             {
                 lock (SyncRoot) { _step = i + 1; }
@@ -86,7 +99,7 @@ public class PolarAlignmentController : ControllerBase
                 await System.IO.File.WriteAllBytesAsync(tempImage, _state.LatestImageData!, token);
 
                 // 2. Solve
-                var focalLength = 400.0;
+                var focalLength = ResolveFocalLength();
                 var pixelSize = _state.CameraInfo?.PixelSize ?? 3.76;
                 var solve = await _solver.SolveAsync(tempImage, focalLength, pixelSize, 
                     i == 0 ? double.NaN : raPts[i-1], i == 0 ? double.NaN : decPts[i-1]); // Fast local solve after point 1
@@ -114,9 +127,6 @@ public class PolarAlignmentController : ControllerBase
             // 4. Calculate Base Error
             lock (SyncRoot)
             {
-                double latitude = 37.0; // TODO: Fetch from ProfileManager.Instance.ActiveProfile.Telescope.SiteLatitude
-                double longitude = -122.0;
-
                 _baseError = PolarAlignmentMath.CalculateError(
                     raPts[0], decPts[0], raPts[1], decPts[1], raPts[2], decPts[2],
                     latitude, longitude);
@@ -145,15 +155,12 @@ public class PolarAlignmentController : ControllerBase
                 await System.IO.File.WriteAllBytesAsync(tempImage, _state.LatestImageData!, token);
 
                 // Fast local solve around last known point
-                var focalLength = 400.0;
+                var focalLength = ResolveFocalLength();
                 var pixelSize = _state.CameraInfo?.PixelSize ?? 3.76;
                 var solve = await _solver.SolveAsync(tempImage, focalLength, pixelSize, raPts[2], decPts[2]);
                 
                 if (solve.Success)
                 {
-                    double latitude = 37.0;
-                    double longitude = -122.0;
-
                     DateTime nowUtc = DateTime.UtcNow;
                     double lst = AstroUtil.GetLocalSiderealTime(nowUtc, longitude);
                     double hourAngleHours = AstroUtil.GetHourAngle(lst, solve.Coordinates.RA);
@@ -191,6 +198,31 @@ public class PolarAlignmentController : ControllerBase
             await BroadcastStatusAsync();
             _eventBus.Broadcast("PolarAlignmentError", $"Routine failed or was aborted: {ex.Message}");
         }
+    }
+
+    /// Observing-site coordinates: prefer what the mount itself reports
+    /// (GEOGRAPHIC_COORD → TelescopeInfo), fall back to the phone-synced
+    /// equipment profile. (0,0) from either source means "not configured".
+    private (double Latitude, double Longitude)? ResolveSiteCoordinates()
+    {
+        var info = _state.TelescopeInfo;
+        if (info != null && (info.SiteLatitude != 0 || info.SiteLongitude != 0))
+            return (info.SiteLatitude, info.SiteLongitude);
+
+        var profile = ProfileSyncController.ActiveCloudProfile;
+        if (profile != null && (profile.SiteLatitude != 0 || profile.SiteLongitude != 0))
+            return (profile.SiteLatitude, profile.SiteLongitude);
+
+        return null;
+    }
+
+    /// Focal length for the solver's FOV hint — profile-synced value when the
+    /// phone has pushed one, otherwise a conservative 400 mm default (a wrong
+    /// hint slows the solve but doesn't corrupt the result).
+    private static double ResolveFocalLength()
+    {
+        var fl = ProfileSyncController.ActiveCloudProfile?.TelescopeFocalLength ?? 0;
+        return fl > 0 ? fl : 400.0;
     }
 
     private Task BroadcastStatusAsync()

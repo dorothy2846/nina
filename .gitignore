@@ -79,8 +79,7 @@ TestResult.xml
 *.sap
 
 # AxoCover is a Code Coverage Tool
-.axoCover/*
-!.axoCover/settings.json
+.axoCover/
 
 # NuGet Packages
 *.nupkg
@@ -121,3 +120,8 @@ linux-arm64/
 astrometry_errors.txt
 tmp_errors.txt
 nul
+
+# macOS / editor / capture cruft
+.DS_Store
+*.fits
+.ruff_cache/
