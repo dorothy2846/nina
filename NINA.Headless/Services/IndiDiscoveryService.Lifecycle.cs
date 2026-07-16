@@ -105,6 +105,7 @@ public partial class IndiDiscoveryService
         // Rotator/Dome/FlatPanel can be added when we expose IsRotator etc. flags
 
         DetectConnectionEdges(devs);
+        CheckPreviewCapRestore();
     }
 
     /// <summary>Fires when an INDI device transitions Disconnected → Connected (rising

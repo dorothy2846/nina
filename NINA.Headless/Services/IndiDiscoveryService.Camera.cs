@@ -142,12 +142,38 @@ public partial class IndiDiscoveryService
             ("RECORD_FRAME_ON", false), ("RECORD_OFF", true)
         }, ct);
 
-        // Restore the preview cap StartRecordingAsync lowered.
+        await RestorePreviewCapAsync(deviceName, ct);
+    }
+
+    /// <summary>Frames-mode recordings stop DRIVER-side when the burst count is
+    /// reached — StopRecordingAsync never runs. Called from OnDevicesChanged so
+    /// the RECORD_STREAM switch flipping to OFF triggers the cap restore.</summary>
+    internal void CheckPreviewCapRestore()
+    {
+        List<string> capped;
+        lock (_previewFpsLock)
+        {
+            if (_savedPreviewFps.Count == 0) return;
+            capped = _savedPreviewFps.Keys.ToList();
+        }
+        foreach (var dev in capped)
+        {
+            if (!GetRecordingStatus(dev).running)
+                _ = Task.Run(() => RestorePreviewCapAsync(dev, CancellationToken.None));
+        }
+    }
+
+    /// Restore the preview cap StartRecordingAsync lowered. Idempotent — the
+    /// saved entry is consumed on first restore.
+    private async Task RestorePreviewCapAsync(string deviceName, CancellationToken ct)
+    {
         double saved;
         lock (_previewFpsLock)
         {
             if (!_savedPreviewFps.Remove(deviceName, out saved)) return;
         }
+        var client = _client;
+        if (client == null) return;
         try
         {
             await client.SetNumberAsync(deviceName, "LIMITS", "LIMITS_PREVIEW_FPS", saved, ct);

@@ -112,6 +112,13 @@ public partial class CameraController
         int durationSec;
         if (requestedMode == "frames")
         {
+            // Frames mode is the lucky-imaging path — bursts are legitimately
+            // large, but an unbounded count is the same fill-the-disk footgun
+            // the duration cap exists for. 20k frames ≈ minutes of planetary
+            // capture; beyond that, compose multiple takes.
+            const int kMaxFrames = 20_000;
+            if (request?.FrameCount is not (> 0 and <= kMaxFrames))
+                return BadRequest(new { success = false, message = $"frameCount must be 1..{kMaxFrames}" });
             mode = IndiDiscoveryService.RecordMode.Frames;
             durationSec = 0;
         }
@@ -160,6 +167,69 @@ public partial class CameraController
             return Ok(new { success = true, message = "No camera — nothing to stop" });
         await _indi.StopRecordingAsync(selected.UniqueId, HttpContext.RequestAborted);
         return Ok(new { success = true, message = "Recording stopped" });
+    }
+
+    // ----- Recorded-file management -----
+    //
+    // SER takes are gigabytes each and land on the server disk; without a
+    // listing/delete surface they accumulate invisibly until the disk fills.
+    // Download is deliberately absent — multi-GB transfers to a phone make no
+    // sense; takes are pulled off the box over SMB/USB for stacking on a PC.
+
+    private static string VideosDir
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                        "BeyondStellar", "captures", "videos");
+
+    [HttpGet("record/files")]
+    public IActionResult RecordFiles()
+    {
+        var dir = VideosDir;
+        var files = Directory.Exists(dir)
+            ? new DirectoryInfo(dir).GetFiles()
+                .Where(f => f.Extension is ".ser" or ".avi")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Select(f => new
+                {
+                    name = f.Name,
+                    sizeBytes = f.Length,
+                    modifiedAt = f.LastWriteTimeUtc,
+                })
+                .ToArray()
+            : Array.Empty<object>();
+
+        long freeBytes = 0;
+        try { freeBytes = new DriveInfo(Path.GetPathRoot(dir) ?? "/").AvailableFreeSpace; }
+        catch { /* free-space is advisory */ }
+
+        return Ok(new { files, freeBytes, dir });
+    }
+
+    public record DeleteRecordFileRequest(string? Name);
+
+    [HttpPost("record/files/delete")]
+    public IActionResult DeleteRecordFile([FromBody] DeleteRecordFileRequest? request)
+    {
+        var name = request?.Name;
+        if (string.IsNullOrWhiteSpace(name))
+            return BadRequest(new { success = false, message = "name is required" });
+        // The name must be a bare file inside VideosDir — no separators, no
+        // traversal, recording extensions only.
+        if (name.Contains('/') || name.Contains('\\') || name.Contains("..") ||
+            !(name.EndsWith(".ser", StringComparison.OrdinalIgnoreCase) ||
+              name.EndsWith(".avi", StringComparison.OrdinalIgnoreCase)))
+            return BadRequest(new { success = false, message = $"Invalid file name '{name}'" });
+
+        var recording = _equipment.GetSelected(DeviceKind.Camera) is { Provider: EquipmentProvider.Indi } sel
+                        && _indi.GetRecordingStatus(sel.UniqueId).running;
+        if (recording)
+            return Conflict(new { success = false, message = "Recording in progress — stop it before deleting files" });
+
+        var path = Path.Combine(VideosDir, name);
+        if (!System.IO.File.Exists(path))
+            return NotFound(new { success = false, message = $"'{name}' not found" });
+
+        System.IO.File.Delete(path);
+        return Ok(new { success = true, message = $"'{name}' deleted" });
     }
 
     [HttpGet("record/status")]
