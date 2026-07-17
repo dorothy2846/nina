@@ -68,7 +68,7 @@ public class RemoteController : ControllerBase
     [HttpPost("config")]
     public async Task<IActionResult> UpdateConfig([FromBody] UpdateRequest req)
     {
-        if (!await IsAuthorizedAsync()) return Forbid();
+        if (!await IsAuthorizedAsync()) return Unauthorized(new { error = "unauthorized", message = "Valid bearer token or owner account required" });
         var cur = _store.Load();
         var next = cur with
         {
@@ -79,7 +79,7 @@ public class RemoteController : ControllerBase
         return Ok(new { success = true, machineId = next.MachineId, rendezvousUrl = next.RendezvousUrl, enabled = next.Enabled });
     }
 
-    public record PairRequest(string DeviceId, string Nickname, string PublicKey);
+    public record PairRequest(string DeviceId, string? Nickname = null, string? PublicKey = null);
 
     /// <summary>Initial pairing — single-owner LAN-trust model: anyone reachable
     /// on the LAN may pair, since presence on the WiFi is itself the credential.
@@ -118,7 +118,7 @@ public class RemoteController : ControllerBase
     [HttpGet("paired-devices")]
     public async Task<IActionResult> ListPaired()
     {
-        if (!await IsAuthorizedAsync()) return Forbid();
+        if (!await IsAuthorizedAsync()) return Unauthorized(new { error = "unauthorized", message = "Valid bearer token or owner account required" });
         var devices = _paired.ListActive();
         return Ok(devices.Select(d => new
         {
@@ -132,7 +132,7 @@ public class RemoteController : ControllerBase
     [HttpDelete("paired-devices/{id}")]
     public async Task<IActionResult> Revoke(string id)
     {
-        if (!await IsAuthorizedAsync()) return Forbid();
+        if (!await IsAuthorizedAsync()) return Unauthorized(new { error = "unauthorized", message = "Valid bearer token or owner account required" });
         var ok = _paired.Revoke(id);
         return ok ? NoContent() : NotFound();
     }
@@ -147,7 +147,7 @@ public class RemoteController : ControllerBase
     [HttpPost("co-owners")]
     public async Task<IActionResult> AddCoOwner([FromBody] CoOwnerRequest req)
     {
-        if (!await IsAuthorizedAsync()) return Forbid();
+        if (!await IsAuthorizedAsync()) return Unauthorized(new { error = "unauthorized", message = "Valid bearer token or owner account required" });
         if (string.IsNullOrWhiteSpace(req?.UserUuid))
             return BadRequest(new { error = "missing_userUuid" });
         var coOwners = _owner.AddCoOwner(req.UserUuid.Trim());
@@ -161,7 +161,7 @@ public class RemoteController : ControllerBase
     [HttpDelete("co-owners/{userUuid}")]
     public async Task<IActionResult> RemoveCoOwner(string userUuid)
     {
-        if (!await IsAuthorizedAsync()) return Forbid();
+        if (!await IsAuthorizedAsync()) return Unauthorized(new { error = "unauthorized", message = "Valid bearer token or owner account required" });
         _owner.RemoveCoOwner(userUuid);
         return Ok(new { owner = _owner.Owner, coOwners = _owner.ListCoOwners() });
     }
@@ -175,7 +175,7 @@ public class RemoteController : ControllerBase
     [HttpPost("factory-reset")]
     public async Task<IActionResult> FactoryReset([FromBody] FactoryResetRequest req)
     {
-        if (!await IsAuthorizedAsync()) return Forbid();
+        if (!await IsAuthorizedAsync()) return Unauthorized(new { error = "unauthorized", message = "Valid bearer token or owner account required" });
         if (req.Confirm != "RESET") return BadRequest(new { error = "missing_confirm" });
         _paired.Clear();
         _owner.Reset();
