@@ -36,6 +36,75 @@ public static class AutofocusMath
         public double MinimumHfd { get; set; } // The HFD at perfect focus position (Y axis)
     }
 
+    /// <summary>Median half-flux RADIUS (pixels) across detected stars — the
+    /// real measurement the V-curve is built from. Per star: local background
+    /// from the box border median, flux-weighted centroid, then the radius
+    /// containing half the background-subtracted flux. Median across stars
+    /// rejects hot pixels / tight doubles without needing per-star filtering.</summary>
+    public static double? MeasureMedianHfr(float[] px, int width, int height, IReadOnlyList<StarDetector.Star> stars)
+    {
+        const int box = 15;
+        var hfrs = new List<double>();
+
+        foreach (var s in stars)
+        {
+            int cx = (int)Math.Round(s.X), cy = (int)Math.Round(s.Y);
+            if (cx < box || cy < box || cx >= width - box || cy >= height - box) continue;
+
+            // Local background: median of the box border ring.
+            var border = new List<float>(8 * box + 4);
+            for (int dx = -box; dx <= box; dx++)
+            {
+                border.Add(px[(cy - box) * width + cx + dx]);
+                border.Add(px[(cy + box) * width + cx + dx]);
+            }
+            for (int dy = -box + 1; dy < box; dy++)
+            {
+                border.Add(px[(cy + dy) * width + cx - box]);
+                border.Add(px[(cy + dy) * width + cx + box]);
+            }
+            border.Sort();
+            float bg = border[border.Count / 2];
+
+            // Flux-weighted centroid.
+            double flux = 0, sumX = 0, sumY = 0;
+            for (int dy = -box; dy <= box; dy++)
+            for (int dx = -box; dx <= box; dx++)
+            {
+                var v = px[(cy + dy) * width + (cx + dx)] - bg;
+                if (v <= 0) continue;
+                flux += v;
+                sumX += v * (cx + dx);
+                sumY += v * (cy + dy);
+            }
+            if (flux <= 0) continue;
+            double mx = sumX / flux, my = sumY / flux;
+
+            // Radius that contains half the flux.
+            var samples = new List<(double R, double V)>();
+            for (int dy = -box; dy <= box; dy++)
+            for (int dx = -box; dx <= box; dx++)
+            {
+                var v = px[(cy + dy) * width + (cx + dx)] - bg;
+                if (v <= 0) continue;
+                var r = Math.Sqrt((cx + dx - mx) * (cx + dx - mx) + (cy + dy - my) * (cy + dy - my));
+                samples.Add((r, v));
+            }
+            samples.Sort((a, b) => a.R.CompareTo(b.R));
+            double cum = 0, half = flux / 2.0, hfr = box;
+            foreach (var (r, v) in samples)
+            {
+                cum += v;
+                if (cum >= half) { hfr = r; break; }
+            }
+            hfrs.Add(hfr);
+        }
+
+        if (hfrs.Count == 0) return null;
+        hfrs.Sort();
+        return hfrs[hfrs.Count / 2];
+    }
+
     /// <summary>
     /// Implements RANSAC-like or IQR-based outlier rejection to filter bad atmospheric HFD points.
     /// </summary>

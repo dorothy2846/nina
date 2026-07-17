@@ -19,6 +19,8 @@ public class FocuserController : ControllerBase
 {
     private static readonly object AutoFocusLock = new();
     private static CancellationTokenSource? _autoFocusCts;
+    private static string? _afLastError;
+    private static object? _afSnapshot;
 
     private readonly IFocuserMediator _focuser;
     private readonly NinaStateService _state;
@@ -164,6 +166,7 @@ public class FocuserController : ControllerBase
         {
             _autoFocusCts?.Cancel();
             _autoFocusCts = new CancellationTokenSource();
+            _afLastError = null;
 
             var token = _autoFocusCts.Token;
             _ = Task.Run(() => PerformAutofocusAsync(token), token);
@@ -172,85 +175,129 @@ public class FocuserController : ControllerBase
         return Ok(new { success = true, message = "Autofocus started" });
     }
 
+    /// <summary>Real V-curve autofocus. The previous implementation SIMULATED
+    /// the measurements (cosh curve around a mock 'perfect focus' derived
+    /// from the start position) — it reported success on any hardware while
+    /// measuring nothing. This one drives the INDI focuser directly, takes
+    /// real INDI exposures, measures the median half-flux radius per point,
+    /// and restores the starting position on any failure.</summary>
     private async Task PerformAutofocusAsync(CancellationToken token)
     {
+        int? initialPosition = null;
+        string? focuserName = null;
         try
         {
             var profile = ProfileSyncController.ActiveCloudProfile;
             int stepSize = profile?.FocuserStepSize ?? 50;
             int initialOffsets = profile?.InitialOffsetSteps ?? 4;
-            int backlash = profile?.Backlash ?? 1000;
+            int backlash = profile?.Backlash ?? 100;
+            double exposureSeconds = 3.0;
 
-            var info = _focuser.GetInfo();
-            if (info == null || !info.Connected) throw new Exception("Focuser not connected");
+            var focuserSel = _equipment.GetSelected(DeviceKind.Focuser);
+            if (focuserSel?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Focuser))
+                throw new Exception("Focuser not connected");
+            focuserName = focuserSel.UniqueId;
 
-            int initialPosition = info.Position;
-            int outerBoundary = initialPosition + (stepSize * initialOffsets);
+            var cameraSel = _equipment.GetSelected(DeviceKind.Camera);
+            if (cameraSel?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Camera))
+                throw new Exception("Camera not connected");
+
+            initialPosition = _indi.GetFocuserPosition(focuserName)
+                ?? throw new Exception("Focuser reports no position");
+
+            int outerBoundary = initialPosition.Value + (stepSize * initialOffsets);
             int totalPoints = (initialOffsets * 2) + 1;
-
             var points = new List<AutofocusMath.FocuserPoint>();
 
             await BroadcastAfStatusAsync(true, false, null, points);
 
-            // 1. Move to Outer Boundary (With Overshoot for Backlash)
-            await _focuser.MoveFocuser(outerBoundary + backlash, token);
-            await _focuser.MoveFocuser(outerBoundary, token);
-            await Task.Delay(2000, token); // Settle
+            // 1. Move to the outer boundary with a backlash overshoot so every
+            // measurement leg approaches from the same direction.
+            await MoveFocuserAndSettleAsync(focuserName, outerBoundary + backlash, token);
+            await MoveFocuserAndSettleAsync(focuserName, outerBoundary, token);
 
             int currentTarget = outerBoundary;
-            int simulatedPerfectFocus = initialPosition - (stepSize / 2); // Mock exact point for testing
-
             for (int i = 0; i < totalPoints; i++)
             {
-                if (token.IsCancellationRequested) break;
+                token.ThrowIfCancellationRequested();
 
-                // Move IN
                 if (i > 0)
                 {
                     currentTarget -= stepSize;
-                    await _focuser.MoveFocuser(currentTarget, token);
-                    await Task.Delay(2000, token); // Settle
+                    await MoveFocuserAndSettleAsync(focuserName, currentTarget, token);
                 }
 
-                // Simulate Capture & HFD Measurement (Math.Abs distance creates a perfect V curve)
-                // In reality: await _state.CameraMediator.Capture(...) -> extract HFD
-                await Task.Delay(1000, token); // Simulate capture time
-                
-                double distance = Math.Abs(currentTarget - simulatedPerfectFocus);
-                // Hyperbolic simulation: y = a * cosh(t)
-                double a = 2.0; // min HFD
-                double b = 150.0;
-                double hfd = a * Math.Cosh(distance / b) + (new Random().NextDouble() * 0.2); // Add light noise
+                // Capture + measure. One retry on a starless frame (wind gust,
+                // brief cloud); two in a row is a real condition worth failing on.
+                double? hfr = await CaptureAndMeasureHfrAsync(cameraSel.UniqueId, exposureSeconds, token)
+                           ?? await CaptureAndMeasureHfrAsync(cameraSel.UniqueId, exposureSeconds, token);
+                if (hfr == null)
+                    throw new Exception($"No stars detected at position {currentTarget} (clouds, cap on, or way out of focus)");
 
-                points.Add(new AutofocusMath.FocuserPoint(currentTarget, hfd));
-                
-                // RANSAC / IQR Filtering
+                points.Add(new AutofocusMath.FocuserPoint(currentTarget, hfr.Value));
                 points = AutofocusMath.FilterOutliers(points);
-
-                // Live Fit calculation
                 var fit = AutofocusMath.CalculateHyperbolicFit(points);
-
                 await BroadcastAfStatusAsync(true, false, fit, points);
             }
 
-            // 2. Final Fit and Slew
+            // 2. Final fit and move to computed best focus.
             var finalFit = AutofocusMath.CalculateHyperbolicFit(points);
-            
-            if (finalFit.Success)
-            {
-                int targetFocus = (int)finalFit.P;
-                
-                // Backlash Overshoot outwards, then in
-                await _focuser.MoveFocuser(targetFocus + backlash, token);
-                await _focuser.MoveFocuser(targetFocus, token);
-            }
+            if (!finalFit.Success)
+                throw new Exception("Hyperbolic fit failed — V-curve did not converge (bad seeing or wrong step size)");
 
+            int targetFocus = (int)Math.Round(finalFit.P);
+            await MoveFocuserAndSettleAsync(focuserName, targetFocus + backlash, token);
+            await MoveFocuserAndSettleAsync(focuserName, targetFocus, token);
+
+            Console.WriteLine($"[Autofocus] converged: best={targetFocus} minHFR={finalFit.MinimumHfd:F2} from {points.Count} points");
             await BroadcastAfStatusAsync(false, true, finalFit, points);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            _eventBus.Broadcast("AutofocusError", "Routine failed or aborted");
+            // Restore where the user left the focuser — a failed run must not
+            // strand the imaging train hundreds of steps out of focus.
+            if (initialPosition.HasValue && focuserName != null)
+            {
+                try { await MoveFocuserAndSettleAsync(focuserName, initialPosition.Value, CancellationToken.None); }
+                catch { /* best effort */ }
+            }
+            lock (AutoFocusLock) { _afLastError = ex.Message; }
+            _eventBus.Broadcast("AutofocusError", ex.Message);
+            await BroadcastAfStatusAsync(false, false, null, new List<AutofocusMath.FocuserPoint>());
         }
+    }
+
+    /// <summary>INDI focuser move + bounded settle: poll until the reported
+    /// position stops changing (and matches the target when the driver is
+    /// exact), then a short mechanical settle.</summary>
+    private async Task MoveFocuserAndSettleAsync(string focuserName, int target, CancellationToken token)
+    {
+        await _indi.FocuserMoveAsync(focuserName, target, token);
+        int? last = null;
+        for (int i = 0; i < 60; i++)
+        {
+            await Task.Delay(500, token);
+            var pos = _indi.GetFocuserPosition(focuserName);
+            if (pos.HasValue && pos == last && Math.Abs(pos.Value - target) <= 2) break;
+            last = pos;
+        }
+        await Task.Delay(500, token);
+    }
+
+    /// <summary>INDI exposure → in-memory FITS → star detection → median HFR.
+    /// Null when no stars were found (caller decides whether that's fatal).</summary>
+    private async Task<double?> CaptureAndMeasureHfrAsync(string cameraName, double exposureSeconds, CancellationToken token)
+    {
+        var (bytes, _) = await _indi.CameraExposeAsync(cameraName, exposureSeconds, token);
+        if (bytes == null || bytes.Length == 0) return null;
+
+        float[] px; int w, h;
+        try { (px, w, h) = FitsReader.Read(bytes); }
+        catch { return null; }
+
+        var stars = StarDetector.Detect(px, w, h, maxStars: 60);
+        if (stars.Count == 0) return null;
+        return AutofocusMath.MeasureMedianHfr(px, w, h, stars);
     }
 
     private async Task BroadcastAfStatusAsync(bool running, bool completed, AutofocusMath.HyperbolicFitResult? fit, List<AutofocusMath.FocuserPoint> points)
@@ -261,10 +308,27 @@ public class FocuserController : ControllerBase
             completed,
             points = points.Select(p => new { x = p.Position, y = p.Hfd, isOutlier = p.IsOutlier }),
             fitParameters = fit != null && fit.Success ? new { a = fit.A, b = fit.B, p = fit.P } : null,
-            optimalPosition = fit != null && fit.Success ? fit.P : (double?)null
+            optimalPosition = fit != null && fit.Success ? fit.P : (double?)null,
+            lastError = _afLastError
         };
 
+        lock (AutoFocusLock) { _afSnapshot = payload; }
         _eventBus.Broadcast("AutofocusLiveUpdate", payload);
+    }
+
+    /// <summary>HTTP mirror of the AutofocusLiveUpdate event stream — pollers
+    /// (and post-mortems) see the same points/fit plus WHY a run failed.</summary>
+    [HttpGet("autofocus/status")]
+    public IActionResult AutofocusStatus()
+    {
+        lock (AutoFocusLock)
+        {
+            return Ok(new
+            {
+                snapshot = _afSnapshot,
+                lastError = _afLastError
+            });
+        }
     }
 
     [HttpPost("autofocus/stop")]
