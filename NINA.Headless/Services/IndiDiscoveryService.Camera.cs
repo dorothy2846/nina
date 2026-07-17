@@ -368,6 +368,19 @@ public partial class IndiDiscoveryService
         return (w > 0 && h > 0) ? (w, h) : null;
     }
 
+    /// <summary>Current CCD_FRAME (subframe) as reported by the driver — the
+    /// applied ROI, as opposed to CCD_INFO's full sensor size.</summary>
+    public (int width, int height)? GetCcdFrame(string deviceName)
+    {
+        var client = _client; if (client == null) return null;
+        var dev = client.GetDevice(deviceName);
+        if (dev == null) return null;
+        if (!dev.Properties.TryGetValue("CCD_FRAME", out var frame)) return null;
+        var w = (int)(frame["WIDTH"]?.AsDouble ?? 0);
+        var h = (int)(frame["HEIGHT"]?.AsDouble ?? 0);
+        return (w > 0 && h > 0) ? (w, h) : null;
+    }
+
     public async Task SetCoolingAsync(string deviceName, bool enabled, double? targetTemperature, CancellationToken ct)
     {
         var client = _client; if (client == null) return;
