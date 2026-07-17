@@ -21,10 +21,32 @@ public class PlateSolvingController : ControllerBase
     private static object? _lastResult;
 
     private readonly NinaStateService _state;
+    private readonly EquipmentSelectionService _equipment;
+    private readonly IndiDiscoveryService _indi;
 
-    public PlateSolvingController(NinaStateService state)
+    public PlateSolvingController(NinaStateService state, EquipmentSelectionService equipment, IndiDiscoveryService indi)
     {
         _state = state;
+        _equipment = equipment;
+        _indi = indi;
+    }
+
+    /// <summary>INDI-direct exposure to a temp file for ASTAP — the NINA
+    /// CameraMediator has no headless handler, so LatestImageData was always
+    /// null and both endpoints solved a 100-byte dummy file.</summary>
+    private async Task<string> CaptureToTempAsync(double exposureSeconds, CancellationToken token)
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Camera);
+        if (selected?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Camera))
+            throw new InvalidOperationException("No INDI camera connected for plate solving");
+        var (bytes, format) = await _indi.CameraExposeAsync(selected.UniqueId, exposureSeconds, token);
+        if (bytes == null || bytes.Length == 0)
+            throw new InvalidOperationException("Camera returned no image data");
+        var ext = string.IsNullOrEmpty(format) ? "fits" : format.TrimStart('.');
+        var tempDir = PlatformPaths.IsLinux && Directory.Exists("/dev/shm") ? "/dev/shm" : Path.GetTempPath();
+        var tempImage = Path.Combine(tempDir, $"solve_{Guid.NewGuid()}.{ext}");
+        await System.IO.File.WriteAllBytesAsync(tempImage, bytes, token);
+        return tempImage;
     }
 
     [HttpGet("status")]
@@ -55,19 +77,9 @@ public class PlateSolvingController : ControllerBase
 
         var solver = new HeadlessAstapSolver(astapPath);
 
-        // 2. Mock camera capture & file creation for now (In reality, _state.CameraMediator.Capture() is used)
-        // Wait for latest image data or trigger real hardware exposure
-        var tempImage = Path.Combine(Path.GetTempPath(), $"solve_{Guid.NewGuid()}.jpg");
-        
-        if (_state.LatestImageData != null)
-        {
-            await System.IO.File.WriteAllBytesAsync(tempImage, _state.LatestImageData);
-        }
-        else
-        {
-            // Dummy logic if no camera attached during test
-            await System.IO.File.WriteAllBytesAsync(tempImage, new byte[100]); 
-        }
+        string tempImage;
+        try { tempImage = await CaptureToTempAsync(request.ExposureTime, HttpContext.RequestAborted); }
+        catch (Exception ex) { return StatusCode(503, new { success = false, errorMessage = ex.Message }); }
 
         // 3. Run the Robust City-Solver ASTAP Pipeline
         // Profile-synced focal length when the phone has pushed one; 400 mm
@@ -76,12 +88,15 @@ public class PlateSolvingController : ControllerBase
         var focalLength = profileFl > 0 ? profileFl : 400.0;
         var pixelSize = camera?.PixelSize ?? 3.76;
         
-        var solveResult = await solver.SolveAsync(
-            tempImage, 
-            focalLength, 
-            pixelSize, 
-            telescope?.RightAscension ?? double.NaN, 
-            telescope?.Declination ?? double.NaN);
+        double hintRaDeg = double.NaN, hintDecDeg = double.NaN;
+        if (telescope != null && !double.IsNaN(telescope.RightAscension))
+        {
+            var (raJ2000, decJ2000) = PolarAlignmentController.ToJ2000(telescope.RightAscension, telescope.Declination);
+            hintRaDeg = raJ2000; hintDecDeg = decJ2000; // ASTAP -ra is in HOURS
+        }
+        var solveResult = await solver.SolveAsync(tempImage, focalLength, pixelSize, hintRaDeg, hintDecDeg);
+        if (!solveResult.Success)
+            solveResult = await solver.SolveAsync(tempImage, focalLength, pixelSize, double.NaN, double.NaN); // blind fallback
 
         // Cleanup
         try { System.IO.File.Delete(tempImage); } catch { }
@@ -95,12 +110,13 @@ public class PlateSolvingController : ControllerBase
         var result = new
         {
             success = true,
-            ra = solveResult.Coordinates.RA,
+            // Solver reports RA in hours; API speaks degrees (J2000).
+            ra = solveResult.Coordinates.RA * 15.0,
             dec = solveResult.Coordinates.Dec,
             pixelScale = solveResult.Pixscale,
             rotation = solveResult.PositionAngle,
             flipped = solveResult.Flipped,
-            solveTimeMs = 1500, // Estimated metadata
+            epoch = "J2000",
             errorMessage = (string?)null
         };
 
@@ -128,14 +144,17 @@ public class PlateSolvingController : ControllerBase
             return StatusCode(503, new { success = false, message = "Camera and Telescope must be connected for centering." });
         }
 
-        var focalLength = 400.0; // Retrieve from Profile in production
+        var profileFl = ProfileSyncController.ActiveCloudProfile?.TelescopeFocalLength ?? 0;
+        var focalLength = profileFl > 0 ? profileFl : 400.0;
         var pixelSize = cameraInfo.PixelSize;
         var solver = new HeadlessAstapSolver(PlatformPaths.AstapPath);
 
-        // Convert target to radians for distance math later
+        // Target arrives in J2000 degrees (SkyMap catalog frame) — the solve is
+        // J2000 too, so separation math stays in J2000. Only the mount speaks
+        // epoch-of-date: convert at the sync/slew boundary.
         var targetRaRad = request.TargetRa * Math.PI / 180.0;
         var targetDecRad = request.TargetDec * Math.PI / 180.0;
-        var targetCoords = new Coordinates(request.TargetRa, request.TargetDec, Epoch.JNOW, Coordinates.RAType.Degrees);
+        var (targetRaJnowH, targetDecJnow) = PolarAlignmentController.ToJnow(request.TargetRa / 15.0, request.TargetDec);
 
         int attempt = 0;
         double separationDeg = double.MaxValue;
@@ -145,34 +164,16 @@ public class PlateSolvingController : ControllerBase
         {
             attempt++;
 
-            // 1. Capture Image
-            var sequence = new CaptureSequence(
-                request.ExposureTime > 0 ? request.ExposureTime : 5.0,
-                CaptureSequence.ImageTypes.LIGHT, null, 
-                new BinningMode((short)request.Binning, (short)request.Binning), 1);
-            
-            _state.MarkExposureStarted(sequence.ExposureTime);
-            try { await _state.CameraMediator.Capture(sequence, CancellationToken.None, new Progress<ApplicationStatus>()); }
-            catch (Exception ex) { return StatusCode(500, new { success = false, message = $"Capture failed: {ex.Message}" }); }
-            finally { _state.MarkExposureFinished(); }
-
-            // /dev/shm is a RAM-backed tmpfs on Linux — much faster for repeated IO.
-            var tempDir = PlatformPaths.IsLinux && Directory.Exists("/dev/shm")
-                ? "/dev/shm" : Path.GetTempPath();
-            var tempImage = Path.Combine(tempDir, $"center_{Guid.NewGuid()}.jpg");
-            var imgData = _state.LatestImageData; 
-            if (imgData == null || imgData.Length < 100)
-            {
-                // Dummy if real camera driver isn't returning data properly during headles test
-                await System.IO.File.WriteAllBytesAsync(tempImage, new byte[100]);
-            }
-            else
-            {
-                await System.IO.File.WriteAllBytesAsync(tempImage, imgData);
-            }
+            // 1. Capture (INDI-direct — the mediator path never produced data headless)
+            string tempImage;
+            try { tempImage = await CaptureToTempAsync(request.ExposureTime > 0 ? request.ExposureTime : 5.0, HttpContext.RequestAborted); }
+            catch (Exception ex) { return StatusCode(503, new { success = false, message = $"Capture failed: {ex.Message}" }); }
 
             // 2. Solve Image
-            var solveResult = await solver.SolveAsync(tempImage, focalLength, pixelSize, request.TargetRa, request.TargetDec);
+            // ASTAP -ra hint is in HOURS; blind fallback covers a badly lost mount.
+            var solveResult = await solver.SolveAsync(tempImage, focalLength, pixelSize, request.TargetRa / 15.0, request.TargetDec);
+            if (!solveResult.Success)
+                solveResult = await solver.SolveAsync(tempImage, focalLength, pixelSize, double.NaN, double.NaN);
             try { System.IO.File.Delete(tempImage); } catch { }
 
             if (!solveResult.Success)
@@ -181,7 +182,7 @@ public class PlateSolvingController : ControllerBase
             }
 
             // 3. Calculate Separation (Haversine formula approx)
-            var actualRaRad = solveResult.Coordinates.RA * Math.PI / 180.0;
+            var actualRaRad = solveResult.Coordinates.RA * 15.0 * Math.PI / 180.0; // solver RA is hours
             var actualDecRad = solveResult.Coordinates.Dec * Math.PI / 180.0;
             var a = Math.Pow(Math.Sin((actualDecRad - targetDecRad) / 2), 2) + Math.Cos(targetDecRad) * Math.Cos(actualDecRad) * Math.Pow(Math.Sin((actualRaRad - targetRaRad) / 2), 2);
             var distanceRad = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
@@ -194,12 +195,13 @@ public class PlateSolvingController : ControllerBase
                 break;
             }
 
-            // 4. Sync and Slew
-            var actualCoords = new Coordinates(solveResult.Coordinates.RA, solveResult.Coordinates.Dec, Epoch.JNOW, Coordinates.RAType.Degrees);
-            await _state.TelescopeMediator.Sync(actualCoords);
-            await _state.TelescopeMediator.SlewToCoordinatesAsync(targetCoords, CancellationToken.None);
-
-            // Wait for mount to settle
+            // 4. Sync where we actually are (solve J2000 -> JNOW), then slew to target.
+            var telSel = _equipment.GetSelected(DeviceKind.Telescope);
+            if (telSel?.Provider != EquipmentProvider.Indi)
+                return StatusCode(503, new { success = false, message = "INDI telescope required for centering" });
+            var (solveRaJnowH, solveDecJnow) = PolarAlignmentController.ToJnow(solveResult.Coordinates.RA, solveResult.Coordinates.Dec);
+            await _indi.TelescopeSyncAsync(telSel.UniqueId, solveRaJnowH, solveDecJnow, HttpContext.RequestAborted);
+            await _indi.TelescopeSlewAsync(telSel.UniqueId, targetRaJnowH, targetDecJnow, HttpContext.RequestAborted);
             await Task.Delay(3000); 
         }
 

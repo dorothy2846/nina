@@ -345,7 +345,7 @@ public class PolarAlignmentController : ControllerBase
     /// throws, so we fall back to a manual IAU-1976 precession (arcsecond
     /// accuracy; the errors measured here are arcminutes).</summary>
     private static bool _sofaBroken;
-    private static (double RaHours, double DecDeg) ToJnow(double raHours, double decDeg)
+    internal static (double RaHours, double DecDeg) ToJnow(double raHours, double decDeg)
     {
         if (!_sofaBroken)
         {
@@ -360,7 +360,7 @@ public class PolarAlignmentController : ControllerBase
     }
 
     /// <summary>JNOW → J2000 for ASTAP hints (inverse of <see cref="ToJnow"/>).</summary>
-    private static (double RaHours, double DecDeg) ToJ2000(double raHours, double decDeg)
+    internal static (double RaHours, double DecDeg) ToJ2000(double raHours, double decDeg)
     {
         if (!_sofaBroken)
         {
