@@ -26,6 +26,18 @@ public class RotatorController : ControllerBase
     [HttpGet("info")]
     public IActionResult GetInfo()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (selected?.Provider == EquipmentProvider.Indi)
+        {
+            var i = _indi.TryBuildRotatorInfo(selected.UniqueId);
+            if (i != null)
+                return Ok(new
+                {
+                    connected = i.Connected, name = i.Name, position = i.Position,
+                    mechanicalPosition = i.MechanicalPosition, stepSize = i.StepSize,
+                    isMoving = i.IsMoving, canReverse = i.CanReverse, reverse = i.Reverse
+                });
+        }
         var info = _rotator.GetInfo();
         if (info == null)
         {
@@ -48,6 +60,13 @@ public class RotatorController : ControllerBase
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (selected?.Provider == EquipmentProvider.Indi)
+        {
+            var i = _indi.TryBuildRotatorInfo(selected.UniqueId);
+            if (i != null)
+                return Ok(new { connected = i.Connected, position = i.Position, mechanicalPosition = i.MechanicalPosition, isMoving = i.IsMoving });
+        }
         var info = _rotator.GetInfo();
         if (info == null)
         {
@@ -81,6 +100,13 @@ public class RotatorController : ControllerBase
     [HttpPost("move")]
     public async Task<IActionResult> Move([FromBody] RotatorMoveRequest request)
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (_equipment.IsConnected(DeviceKind.Rotator) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.RotatorMoveAsync(selected.UniqueId, request.Position, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Rotator does not expose ABS_ROTATOR_ANGLE" });
+            return Ok(new { success = true, message = $"Rotator moving to {request.Position:F2}", position = request.Position });
+        }
         var movedTo = await _rotator.Move((float)request.Position, CancellationToken.None);
         return Ok(new
         {
@@ -91,8 +117,14 @@ public class RotatorController : ControllerBase
     }
 
     [HttpPost("halt")]
-    public IActionResult Halt()
+    public async Task<IActionResult> Halt()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (_equipment.IsConnected(DeviceKind.Rotator) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            await _indi.RotatorAbortAsync(selected.UniqueId, HttpContext.RequestAborted);
+            return Ok(new { success = true, message = "Rotator halt requested" });
+        }
         var device = _rotator.GetDevice() as IRotator;
         device?.Halt();
 
@@ -108,6 +140,13 @@ public class RotatorController : ControllerBase
     [HttpPost("moveMechanical")]
     public async Task<IActionResult> MoveMechanical([FromBody] RotatorMoveRequest request)
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (_equipment.IsConnected(DeviceKind.Rotator) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.RotatorMoveAsync(selected.UniqueId, request.Position, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Rotator does not expose ABS_ROTATOR_ANGLE" });
+            return Ok(new { success = true, message = $"Rotator mechanical moving to {request.Position:F2}", mechanicalPosition = request.Position });
+        }
         var movedTo = await _rotator.MoveMechanical((float)request.Position, CancellationToken.None);
         return Ok(new { success = true, message = $"Rotator mechanical moved to {movedTo:F2}", mechanicalPosition = movedTo });
     }
@@ -117,8 +156,15 @@ public class RotatorController : ControllerBase
     /// <summary>Tell the rotator "your current mechanical position corresponds to this sky
     /// angle" — used after plate-solve to correct the sky/mechanical offset without moving.</summary>
     [HttpPost("sync")]
-    public IActionResult Sync([FromBody] SyncRequest request)
+    public async Task<IActionResult> Sync([FromBody] SyncRequest request)
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (_equipment.IsConnected(DeviceKind.Rotator) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.RotatorSyncAsync(selected.UniqueId, request.SkyAngle, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Rotator does not expose SYNC_ROTATOR_ANGLE" });
+            return Ok(new { success = true, message = $"Synced sky angle to {request.SkyAngle:F2}" });
+        }
         _rotator.Sync((float)request.SkyAngle);
         return Ok(new { success = true, message = $"Synced sky angle to {request.SkyAngle:F2}" });
     }
@@ -128,8 +174,15 @@ public class RotatorController : ControllerBase
     /// <summary>Flip the direction sense — some focal train / mirror combinations invert the
     /// rotator relative to the sky, so the driver needs to invert outgoing moves.</summary>
     [HttpPost("reverse")]
-    public IActionResult SetReverse([FromBody] ReverseRequest request)
+    public async Task<IActionResult> SetReverse([FromBody] ReverseRequest request)
     {
+        var selected = _equipment.GetSelected(DeviceKind.Rotator);
+        if (_equipment.IsConnected(DeviceKind.Rotator) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.RotatorReverseAsync(selected.UniqueId, request.Reverse, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Rotator does not expose ROTATOR_REVERSE" });
+            return Ok(new { success = true, reverse = request.Reverse });
+        }
         var device = _rotator.GetDevice() as IRotator;
         if (device == null) return StatusCode(503, new { success = false, message = "Rotator not connected" });
         device.Reverse = request.Reverse;

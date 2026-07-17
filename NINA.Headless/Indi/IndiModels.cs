@@ -74,6 +74,10 @@ public sealed class IndiDevice
     public bool IsFilterWheel => (DriverInterface & 0x10) != 0;  // FILTER_INTERFACE
     public bool IsSwitch => (DriverInterface & 0x8000) != 0;     // AUX_INTERFACE — powerbox/relay boards (Pegasus UPB, etc.)
     public bool IsWeather => (DriverInterface & 0x80) != 0;      // WEATHER_INTERFACE — observing conditions
+    public bool IsDome => (DriverInterface & 0x20) != 0;         // DOME_INTERFACE
+    public bool IsRotator => (DriverInterface & 0x1000) != 0;    // ROTATOR_INTERFACE
+    public bool IsLightBox => (DriverInterface & 0x400) != 0;    // LIGHTBOX_INTERFACE — flat panels
+    public bool IsDustCap => (DriverInterface & 0x200) != 0;     // DUSTCAP_INTERFACE — motorized covers, often on flat panels
 
     public bool IsConnected
     {

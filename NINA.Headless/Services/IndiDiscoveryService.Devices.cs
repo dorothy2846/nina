@@ -109,6 +109,80 @@ public partial class IndiDiscoveryService
         return false;
     }
 
+    // ----- Rotator control (INDI standard: ABS_ROTATOR_ANGLE et al.) -----
+    // The NINA mediators have no registered handlers headless, so the rotator/dome
+    // controllers route INDI devices here. Helpers return false when the driver
+    // doesn't expose the property so callers can 503 instead of faking success.
+
+    public async Task<bool> RotatorMoveAsync(string deviceName, double angle, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("ABS_ROTATOR_ANGLE") != true) return false;
+        await client.SetNumberAsync(deviceName, "ABS_ROTATOR_ANGLE", "ANGLE", angle, ct);
+        return true;
+    }
+
+    public async Task<bool> RotatorAbortAsync(string deviceName, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("ROTATOR_ABORT_MOTION") != true) return false;
+        await client.SetSwitchManyAsync(deviceName, "ROTATOR_ABORT_MOTION", new[] { ("ABORT", true) }, ct);
+        return true;
+    }
+
+    public async Task<bool> RotatorSyncAsync(string deviceName, double angle, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("SYNC_ROTATOR_ANGLE") != true) return false;
+        await client.SetNumberAsync(deviceName, "SYNC_ROTATOR_ANGLE", "ANGLE", angle, ct);
+        return true;
+    }
+
+    public async Task<bool> RotatorReverseAsync(string deviceName, bool reversed, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("ROTATOR_REVERSE") != true) return false;
+        await client.SetSwitchManyAsync(deviceName, "ROTATOR_REVERSE",
+            new[] { ("INDI_ENABLED", reversed), ("INDI_DISABLED", !reversed) }, ct);
+        return true;
+    }
+
+    // ----- Dome control (INDI standard: DOME_SHUTTER / DOME_PARK / ABS_DOME_POSITION) -----
+
+    public async Task<bool> DomeShutterAsync(string deviceName, bool open, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("DOME_SHUTTER") != true) return false;
+        await client.SetSwitchManyAsync(deviceName, "DOME_SHUTTER",
+            new[] { ("SHUTTER_OPEN", open), ("SHUTTER_CLOSE", !open) }, ct);
+        return true;
+    }
+
+    public async Task<bool> DomeParkAsync(string deviceName, bool park, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("DOME_PARK") != true) return false;
+        await client.SetSwitchManyAsync(deviceName, "DOME_PARK",
+            new[] { ("PARK", park), ("UNPARK", !park) }, ct);
+        return true;
+    }
+
+    public async Task<bool> DomeAbortAsync(string deviceName, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("DOME_ABORT_MOTION") != true) return false;
+        await client.SetSwitchManyAsync(deviceName, "DOME_ABORT_MOTION", new[] { ("ABORT", true) }, ct);
+        return true;
+    }
+
+    public async Task<bool> DomeGotoAzimuthAsync(string deviceName, double azimuthDeg, CancellationToken ct)
+    {
+        var client = _client; if (client == null) return false;
+        if (client.GetDevice(deviceName)?.Properties.ContainsKey("ABS_DOME_POSITION") != true) return false;
+        await client.SetNumberAsync(deviceName, "ABS_DOME_POSITION", "DOME_ABSOLUTE_POSITION", azimuthDeg, ct);
+        return true;
+    }
+
     /// <summary>Enable / disable the focuser's on-board temperature compensation.
     /// INDI spec vector is <c>FOCUS_TEMPERATURE_COMPENSATION</c> with an INDI_ENABLED /
     /// INDI_DISABLED pair — older drivers sometimes use <c>AUTO_FOCUS_COMP</c>. Returns

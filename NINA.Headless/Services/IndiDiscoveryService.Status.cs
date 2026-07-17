@@ -228,6 +228,7 @@ public partial class IndiDiscoveryService
     {
         var client = _client;
         int? brightness = null;
+        bool? lightOn = null;
         if (client != null)
         {
             var dev = client.GetDevice(selected.UniqueId);
@@ -238,8 +239,10 @@ public partial class IndiDiscoveryService
             {
                 brightness = (int)Math.Round(v);
             }
+            if (dev != null && dev.Properties.TryGetValue("FLAT_LIGHT_CONTROL", out var sw))
+                lightOn = sw["FLAT_LIGHT_ON"]?.ValueOn ?? false;
         }
-        return new { connected = true, name = selected.Name, brightness };
+        return new { connected = true, name = selected.Name, brightness, lightOn };
     }
 
     /// <summary>Status envelope for the Switch endpoints. Returned by both SwitchController
@@ -461,6 +464,11 @@ public partial class IndiDiscoveryService
             info.MechanicalPosition = info.Position;
             info.IsMoving = ang.State == IndiPropertyState.Busy;
         }
+        if (dev.Properties.TryGetValue("ROTATOR_REVERSE", out var rev))
+        {
+            info.CanReverse = true;
+            info.Reverse = rev["INDI_ENABLED"]?.ValueOn ?? false;
+        }
         return info;
     }
 
@@ -475,6 +483,18 @@ public partial class IndiDiscoveryService
         {
             info.Azimuth = pos["DOME_ABSOLUTE_POSITION"]?.AsDouble ?? double.NaN;
             info.Slewing = pos.State == IndiPropertyState.Busy;
+        }
+        if (dev.Properties.TryGetValue("DOME_SHUTTER", out var sh))
+        {
+            var opening = sh["SHUTTER_OPEN"]?.ValueOn ?? false;
+            info.ShutterStatus = sh.State == IndiPropertyState.Busy
+                ? (opening ? NINA.Equipment.Interfaces.ShutterState.ShutterOpening : NINA.Equipment.Interfaces.ShutterState.ShutterClosing)
+                : (opening ? NINA.Equipment.Interfaces.ShutterState.ShutterOpen : NINA.Equipment.Interfaces.ShutterState.ShutterClosed);
+        }
+        if (dev.Properties.TryGetValue("DOME_PARK", out var pk))
+        {
+            info.AtPark = (pk["PARK"]?.ValueOn ?? false) && pk.State != IndiPropertyState.Busy;
+            if (pk.State == IndiPropertyState.Busy) info.Slewing = true;
         }
         return info;
     }

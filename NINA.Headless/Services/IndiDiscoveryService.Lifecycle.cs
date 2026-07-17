@@ -102,7 +102,11 @@ public partial class IndiDiscoveryService
         UpdateKind(DeviceKind.FilterWheel, devs.Where(d => d.IsFilterWheel));
         UpdateKind(DeviceKind.Switch, devs.Where(d => d.IsSwitch));
         UpdateKind(DeviceKind.Weather, devs.Where(d => d.IsWeather));
-        // Rotator/Dome/FlatPanel can be added when we expose IsRotator etc. flags
+        UpdateKind(DeviceKind.Rotator, devs.Where(d => d.IsRotator));
+        UpdateKind(DeviceKind.Dome, devs.Where(d => d.IsDome));
+        // Flat panels: LIGHTBOX covers panels with a lamp; a dust-cover-only device
+        // (motorized cap, no lamp) still belongs on the FlatPanel screen for open/close.
+        UpdateKind(DeviceKind.FlatPanel, devs.Where(d => d.IsLightBox || d.IsDustCap));
 
         DetectConnectionEdges(devs);
         CheckPreviewCapRestore();
@@ -154,7 +158,10 @@ public partial class IndiDiscoveryService
                 dev.IsFocuser ? DeviceKind.Focuser :
                 dev.IsFilterWheel ? DeviceKind.FilterWheel :
                 dev.IsSwitch ? DeviceKind.Switch :
-                dev.IsWeather ? DeviceKind.Weather : (DeviceKind?)null;
+                dev.IsWeather ? DeviceKind.Weather :
+                dev.IsRotator ? DeviceKind.Rotator :
+                dev.IsDome ? DeviceKind.Dome :
+                (dev.IsLightBox || dev.IsDustCap) ? DeviceKind.FlatPanel : (DeviceKind?)null;
             if (kind is DeviceKind k)
             {
                 try { DeviceConnected?.Invoke(k, dev.Name); }

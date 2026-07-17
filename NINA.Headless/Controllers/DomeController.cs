@@ -26,6 +26,27 @@ public class DomeController : ControllerBase
     [HttpGet("info")]
     public IActionResult GetInfo()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (selected?.Provider == EquipmentProvider.Indi)
+        {
+            var i = _indi.TryBuildDomeInfo(selected.UniqueId);
+            if (i != null)
+                return Ok(new
+                {
+                    connected = i.Connected, name = i.Name, azimuth = i.Azimuth,
+                    altitude = i.Altitude, atHome = i.AtHome, atPark = i.AtPark,
+                    shutterStatus = ToShutterStatus(i.ShutterStatus), slewing = i.Slewing,
+                    slaved = false,
+                    capabilities = new
+                    {
+                        canSetAzimuth = _indi.DeviceHasProperty(selected.UniqueId, "ABS_DOME_POSITION"),
+                        canSetShutter = _indi.DeviceHasProperty(selected.UniqueId, "DOME_SHUTTER"),
+                        canFindHome = false,
+                        canPark = _indi.DeviceHasProperty(selected.UniqueId, "DOME_PARK"),
+                        canSyncAzimuth = _indi.DeviceHasProperty(selected.UniqueId, "ABS_DOME_POSITION")
+                    }
+                });
+        }
         var info = _dome.GetInfo();
         if (info == null)
         {
@@ -62,6 +83,18 @@ public class DomeController : ControllerBase
     [HttpGet("status")]
     public IActionResult GetStatus()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (selected?.Provider == EquipmentProvider.Indi)
+        {
+            var i = _indi.TryBuildDomeInfo(selected.UniqueId);
+            if (i != null)
+                return Ok(new
+                {
+                    connected = i.Connected, azimuth = i.Azimuth,
+                    shutterStatus = ToShutterStatus(i.ShutterStatus),
+                    slewing = i.Slewing, atPark = i.AtPark, atHome = i.AtHome
+                });
+        }
         var info = _dome.GetInfo();
         if (info == null)
         {
@@ -97,6 +130,13 @@ public class DomeController : ControllerBase
     [HttpPost("open")]
     public async Task<IActionResult> Open()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (_equipment.IsConnected(DeviceKind.Dome) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.DomeShutterAsync(selected.UniqueId, open: true, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Dome does not expose DOME_SHUTTER" });
+            return Ok(new { success = true, message = "Dome shutter opening" });
+        }
         var success = await _dome.OpenShutter(CancellationToken.None);
         if (!success)
         {
@@ -113,6 +153,13 @@ public class DomeController : ControllerBase
     [HttpPost("close")]
     public async Task<IActionResult> Close()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (_equipment.IsConnected(DeviceKind.Dome) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.DomeShutterAsync(selected.UniqueId, open: false, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Dome does not expose DOME_SHUTTER" });
+            return Ok(new { success = true, message = "Dome shutter closing" });
+        }
         var success = await _dome.CloseShutter(CancellationToken.None);
         if (!success)
         {
@@ -129,6 +176,13 @@ public class DomeController : ControllerBase
     [HttpPost("park")]
     public async Task<IActionResult> Park()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (_equipment.IsConnected(DeviceKind.Dome) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.DomeParkAsync(selected.UniqueId, park: true, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Dome does not expose DOME_PARK" });
+            return Ok(new { success = true, message = "Dome parking" });
+        }
         var success = await _dome.Park(CancellationToken.None);
         if (!success)
         {
@@ -142,12 +196,31 @@ public class DomeController : ControllerBase
         });
     }
 
+    [HttpPost("unpark")]
+    public async Task<IActionResult> Unpark()
+    {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (_equipment.IsConnected(DeviceKind.Dome) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            var ok = await _indi.DomeParkAsync(selected.UniqueId, park: false, HttpContext.RequestAborted);
+            if (!ok) return StatusCode(503, new { success = false, message = "Dome does not expose DOME_PARK" });
+            return Ok(new { success = true, message = "Dome unparking" });
+        }
+        return StatusCode(503, new { success = false, message = "Dome not connected" });
+    }
+
     /// <summary>Emergency stop — halt any in-flight shutter move or azimuth slew. Different
     /// from /park (which parks + closes shutter) or /close (shutter only). Backs onto the
     /// underlying IDome.StopAll() so we cover both motors.</summary>
     [HttpPost("halt")]
     public async Task<IActionResult> Halt()
     {
+        var selected = _equipment.GetSelected(DeviceKind.Dome);
+        if (_equipment.IsConnected(DeviceKind.Dome) && selected?.Provider == EquipmentProvider.Indi)
+        {
+            await _indi.DomeAbortAsync(selected.UniqueId, HttpContext.RequestAborted);
+            return Ok(new { success = true, message = "Dome halted" });
+        }
         if (_dome.GetDevice() is IDome device)
         {
             await device.StopAll();
@@ -180,6 +253,13 @@ public class DomeController : ControllerBase
             return BadRequest(new { success = false, message = "Azimuth is required" });
         }
 
+        var selectedIndi = _equipment.GetSelected(DeviceKind.Dome);
+        if (_equipment.IsConnected(DeviceKind.Dome) && selectedIndi?.Provider == EquipmentProvider.Indi)
+        {
+            var okIndi = await _indi.DomeGotoAzimuthAsync(selectedIndi.UniqueId, request.Azimuth.Value, HttpContext.RequestAborted);
+            if (!okIndi) return StatusCode(503, new { success = false, message = "Dome does not expose ABS_DOME_POSITION" });
+            return Ok(new { success = true, message = $"Dome slewing to azimuth {request.Azimuth.Value:F1}" });
+        }
         var success = await _dome.SlewToAzimuth(request.Azimuth.Value, CancellationToken.None);
         if (!success)
         {
