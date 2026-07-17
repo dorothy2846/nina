@@ -5,10 +5,13 @@ namespace NINA.Headless.Services;
 /// <summary>
 /// SIGKILLs an `indi_*` driver child of indiserver if it sustains &gt;15 % CPU
 /// across 4 consecutive 30 s samples (= 2 min) while no INDI camera is
-/// streaming, and restarts ffmpeg if its IVF output goes silent for &gt;10 s
-/// while the stream pipeline is feeding it. indiserver respawns dead
-/// drivers automatically; the ffmpeg restart re-runs <see cref="H264Transcoder.Start"/>
-/// with the cached args.
+/// streaming, and supervises the ffmpeg encoder while the stream is live:
+/// dead process or &gt;10 s of output silence with input flowing → restart
+/// (re-runs <see cref="H264Transcoder.Start"/> with the cached args); after
+/// 3 fruitless restarts the stream is stopped so the failure surfaces.
+/// Producer stalls (no frames reaching stdin) are logged but never
+/// "fixed" by an encoder restart. indiserver respawns dead drivers
+/// automatically.
 ///
 /// 60 s startup grace covers slow USB enumeration. The streaming carve-out
 /// exempts the only legitimate sustained-CPU case today; widen it if more
@@ -25,6 +28,12 @@ public class DriverWatchdogService : BackgroundService
     private const int MinAliveSecondsBeforeJudging = 60;
     private static readonly TimeSpan TranscoderStallThreshold = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(30);
+    /// <summary>Consecutive failed encoder recoveries before the watchdog
+    /// stops flapping and surfaces the failure by stopping the stream.
+    /// 3 attempts × 30 s ticks ≈ 90 s of dead encoder.</summary>
+    private const int MaxConsecutiveTranscoderRestarts = 3;
+
+    private int _transcoderStrikes;
 
     private readonly Dictionary<int, Queue<double>> _cpuHistory = new();
 
@@ -99,16 +108,74 @@ public class DriverWatchdogService : BackgroundService
             _cpuHistory.Remove(stale);
     }
 
+    /// <summary>
+    /// Encoder health, evaluated only while the stream claims to be live.
+    /// Three distinct failure shapes, handled in order:
+    ///   1. ffmpeg process dead              → respawn (strike)
+    ///   2. no frames reaching ffmpeg stdin  → producer stall; restarting the
+    ///      encoder can't help, so log honestly and leave the INDI side to
+    ///      its own recovery — never mask it with a pointless respawn
+    ///   3. input flowing but no NALs out    → ffmpeg wedged; restart (strike)
+    /// The old check measured silence only from LastFrameAt, so an encoder
+    /// that never produced its FIRST frame — including every post-restart
+    /// wedge, since restart resets that timestamp — was invisible forever.
+    /// Silence now falls back to the spawn time when no NAL has landed yet.
+    /// After <see cref="MaxConsecutiveTranscoderRestarts"/> fruitless
+    /// restarts the watchdog stops the stream instead of flapping ffmpeg
+    /// forever: the client sees running=false and can act, per the
+    /// no-hidden-failures rule.
+    /// </summary>
     private async Task CheckTranscoderAsync()
     {
-        if (!_h264.IsRunning) return;
-        if (!_stream.IsRunning) return;
-        var lastFrame = _h264.LastFrameAt;
-        if (lastFrame == DateTime.MinValue) return;
-        var silence = DateTime.UtcNow - lastFrame;
-        if (silence < TranscoderStallThreshold) return;
-        _log.LogWarning("DriverWatchdog: ffmpeg silent for {Silence}s while stream is active — restarting transcoder",
-            (int)silence.TotalSeconds);
+        if (!_stream.IsRunning)
+        {
+            _transcoderStrikes = 0;
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+
+        if (_h264.IsRunning)
+        {
+            var lastPush = _h264.LastPushAt;
+            if (lastPush == DateTime.MinValue || now - lastPush > TranscoderStallThreshold)
+            {
+                _log.LogWarning(
+                    "DriverWatchdog: stream is active but no frames have reached ffmpeg for {Silence}s — upstream producer stall, not restarting the encoder",
+                    lastPush == DateTime.MinValue ? "∞" : ((int)(now - lastPush).TotalSeconds).ToString());
+                return;
+            }
+
+            var lastFrame = _h264.LastFrameAt;
+            var silenceAnchor = lastFrame == DateTime.MinValue ? _h264.StartedAt : lastFrame;
+            if (silenceAnchor == DateTime.MinValue) return; // start race; judge next tick
+            var silence = now - silenceAnchor;
+            if (silence < TranscoderStallThreshold)
+            {
+                _transcoderStrikes = 0;
+                return;
+            }
+            _log.LogWarning("DriverWatchdog: ffmpeg silent for {Silence}s with input flowing (strike {Strike}/{Max})",
+                (int)silence.TotalSeconds, _transcoderStrikes + 1, MaxConsecutiveTranscoderRestarts);
+        }
+        else
+        {
+            _log.LogWarning("DriverWatchdog: ffmpeg process died while stream is active (strike {Strike}/{Max})",
+                _transcoderStrikes + 1, MaxConsecutiveTranscoderRestarts);
+        }
+
+        _transcoderStrikes++;
+        if (_transcoderStrikes > MaxConsecutiveTranscoderRestarts)
+        {
+            _log.LogError(
+                "DriverWatchdog: encoder still dead after {Max} restarts — stopping the stream so the failure is visible instead of flapping ffmpeg",
+                MaxConsecutiveTranscoderRestarts);
+            _transcoderStrikes = 0;
+            try { await _stream.StopAsync(); }
+            catch (Exception ex) { _log.LogWarning(ex, "DriverWatchdog: stream stop failed"); }
+            return;
+        }
+
         try { await _h264.RestartAsync(); }
         catch (Exception ex) { _log.LogWarning(ex, "DriverWatchdog: ffmpeg restart failed"); }
     }

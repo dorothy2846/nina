@@ -21,6 +21,9 @@ public class H264Transcoder : IAsyncDisposable
     private CancellationTokenSource? _readerCts;
     private readonly object _lock = new();
     private long _lastFrameTicks;
+    private long _lastPushTicks;
+    private long _startedAtTicks;
+    private int _restartCount;
     private int _lastTargetFps;
     private int _lastCrf;
 
@@ -40,6 +43,36 @@ public class H264Transcoder : IAsyncDisposable
             return ticks == 0 ? DateTime.MinValue : new DateTime(ticks, DateTimeKind.Utc);
         }
     }
+
+    /// <summary>UTC time of the most recent frame successfully written to
+    /// ffmpeg stdin, or <see cref="DateTime.MinValue"/> until the first one.
+    /// Watchdog input-side twin of <see cref="LastFrameAt"/>: output silence
+    /// only implicates ffmpeg when input is actually flowing.</summary>
+    public DateTime LastPushAt
+    {
+        get
+        {
+            var ticks = Volatile.Read(ref _lastPushTicks);
+            return ticks == 0 ? DateTime.MinValue : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
+    /// <summary>UTC time the current ffmpeg child was spawned, or
+    /// <see cref="DateTime.MinValue"/> when not running. First-frame deadline
+    /// anchor: after Start/Restart, <see cref="LastFrameAt"/> is empty and
+    /// silence must be measured from here.</summary>
+    public DateTime StartedAt
+    {
+        get
+        {
+            var ticks = Volatile.Read(ref _startedAtTicks);
+            return ticks == 0 ? DateTime.MinValue : new DateTime(ticks, DateTimeKind.Utc);
+        }
+    }
+
+    /// <summary>Total watchdog-driven restarts since process start. Surfaced
+    /// in /camera/stream/status so a flapping encoder is visible, not silent.</summary>
+    public int RestartCount => Volatile.Read(ref _restartCount);
 
     /// <summary>Invoked from the reader thread for every complete NAL unit, sans start code.
     /// First byte is the standard H.264 NAL header (forbidden-zero-bit + nal_ref_idc + nal_unit_type).
@@ -106,6 +139,7 @@ public class H264Transcoder : IAsyncDisposable
             _log.LogInformation("H264Transcoder: launching ffmpeg {Args}", string.Join(' ', argList));
             _proc = Process.Start(psi) ?? throw new InvalidOperationException("ffmpeg failed to start");
             _stdin = _proc.StandardInput.BaseStream;
+            Volatile.Write(ref _startedAtTicks, DateTime.UtcNow.Ticks);
 
             _readerCts = new CancellationTokenSource();
             _readerTask = Task.Run(() => ReadNaluLoopAsync(_proc.StandardOutput.BaseStream, _readerCts.Token));
@@ -144,6 +178,7 @@ public class H264Transcoder : IAsyncDisposable
         try { readerCts?.Cancel(); } catch { }
         if (readerTask != null) { try { await readerTask; } catch { } }
         proc.Dispose();
+        Volatile.Write(ref _startedAtTicks, 0);
         _log.LogInformation("H264Transcoder: stopped");
     }
 
@@ -163,6 +198,7 @@ public class H264Transcoder : IAsyncDisposable
             {
                 await stdin.WriteAsync(frameBytes, ct);
                 await stdin.FlushAsync(ct);
+                Volatile.Write(ref _lastPushTicks, DateTime.UtcNow.Ticks);
             }
             catch (Exception ex) { _log.LogDebug(ex, "H264Transcoder: push failed"); }
             finally { Interlocked.Exchange(ref _pushInFlight, 0); }
@@ -246,6 +282,9 @@ public class H264Transcoder : IAsyncDisposable
         lock (_lock) { fps = _lastTargetFps; crf = _lastCrf; }
         await StopAsync();
         Volatile.Write(ref _lastFrameTicks, 0);
+        Volatile.Write(ref _lastPushTicks, 0);
+        Volatile.Write(ref _startedAtTicks, 0);
+        Interlocked.Increment(ref _restartCount);
         if (fps > 0) Start(fps, crf);
     }
 

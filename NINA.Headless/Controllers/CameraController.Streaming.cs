@@ -27,7 +27,13 @@ public partial class CameraController
         // the server can't keep up. Surfaces real staleness so the iOS HUD
         // can show "STALE" when the camera is wedged instead of a fake fps.
         lastFrameAgeMs = _stream.LastFrameAgeMs,
-        droppedFrames = _stream.DroppedFrames
+        droppedFrames = _stream.DroppedFrames,
+        // Encoder health: running=true with transcoderRunning=false means the
+        // pipeline is broken mid-recovery; a climbing restart count means the
+        // watchdog is fighting a flapping ffmpeg. Both are conditions the
+        // client should see, not conditions to paper over.
+        transcoderRunning = _h264.IsRunning,
+        transcoderRestarts = _h264.RestartCount
     });
 
     [HttpPost("stream/start")]

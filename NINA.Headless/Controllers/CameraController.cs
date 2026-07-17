@@ -32,8 +32,9 @@ public partial class CameraController : ControllerBase
     private readonly CalibrationLibrary _library;
     private readonly LiveStackService _liveStack;
     private readonly Phd2Service _phd2;
+    private readonly H264Transcoder _h264;
 
-    public CameraController(NinaStateService state, RemoteEventBus eventBus, CameraSelectionService cameraSelection, EquipmentSelectionService equipment, IndiDiscoveryService indi, CaptureStore captures, CameraStreamService stream, FlatWizardService flatWizard, CalibrationBatchService calibration, CalibrationLibrary library, LiveStackService liveStack, Phd2Service phd2)
+    public CameraController(NinaStateService state, RemoteEventBus eventBus, CameraSelectionService cameraSelection, EquipmentSelectionService equipment, IndiDiscoveryService indi, CaptureStore captures, CameraStreamService stream, FlatWizardService flatWizard, CalibrationBatchService calibration, CalibrationLibrary library, LiveStackService liveStack, Phd2Service phd2, H264Transcoder h264)
     {
         _state = state;
         _eventBus = eventBus;
@@ -47,6 +48,7 @@ public partial class CameraController : ControllerBase
         _library = library;
         _liveStack = liveStack;
         _phd2 = phd2;
+        _h264 = h264;
     }
 
     [HttpGet("info")]
