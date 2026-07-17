@@ -538,15 +538,70 @@ public partial class IndiDiscoveryService
             new[] { ("MOTION_WEST", false), ("MOTION_EAST", false) }, ct);
     }
 
-    public Task TelescopeFindHomeAsync(string deviceName, CancellationToken ct)
+    /// <summary>Send the mount home. Returns false when the driver has no
+    /// TELESCOPE_HOME property AND emulation isn't possible — callers must
+    /// surface that instead of reporting success (this used to silently
+    /// no-op on such drivers, including the INDI simulator).</summary>
+    public async Task<bool> TelescopeFindHomeAsync(string deviceName, CancellationToken ct)
     {
         var client = _client;
-        if (client == null) return Task.CompletedTask;
+        if (client == null) return false;
         var dev = client.GetDevice(deviceName);
-        var home = dev?.Properties.TryGetValue("TELESCOPE_HOME", out var h) == true ? h : null;
-        // ZWO AM5 uses "GO"; some drivers use "FIND_HOME".
-        var element = home?["GO"] != null ? "GO" : "FIND_HOME";
-        return client.SetSwitchAsync(deviceName, "TELESCOPE_HOME", element, true, ct);
+        if (dev == null) return false;
+
+        if (dev.Properties.TryGetValue("TELESCOPE_HOME", out var home))
+        {
+            // ZWO AM5 uses "GO"; some drivers use "FIND_HOME".
+            var element = home["GO"] != null ? "GO" : "FIND_HOME";
+            await client.SetSwitchAsync(deviceName, "TELESCOPE_HOME", element, true, ct);
+            ScheduleHomeSettle(deviceName);
+            return true;
+        }
+
+        // Emulated CWD home for drivers without TELESCOPE_HOME: slew to hour
+        // angle +6h at the celestial pole, then stop tracking once the goto
+        // settles — a mount sitting at home shouldn't keep sidereal-tracking.
+        if (!dev.Properties.TryGetValue("GEOGRAPHIC_COORD", out var geo)) return false;
+        var lon = geo["LONG"]?.AsDouble;
+        var lat = geo["LAT"]?.AsDouble;
+        if (!lon.HasValue) return false;
+
+        var homeRa = WrapHours(ComputeLstHours(lon.Value) - 6.0);
+        var homeDec = (lat ?? 90) >= 0 ? 90.0 : -90.0;
+        _log.LogInformation("Telescope: no TELESCOPE_HOME on {Device} — emulating CWD home (RA={Ra:F3}h, Dec={Dec})", deviceName, homeRa, homeDec);
+        var ok = await TelescopeSlewAsync(deviceName, homeRa, homeDec, ct);
+        if (!ok) return false;
+        ScheduleHomeSettle(deviceName);
+        return true;
+    }
+
+    /// <summary>After a home command (native or emulated), wait for the goto
+    /// to finish and stop tracking. A mount sitting at home shouldn't keep
+    /// sidereal-tracking — this is what made "Go Home" feel wrong: the sim
+    /// reached home and immediately kept tracking away from it.</summary>
+    private void ScheduleHomeSettle(string deviceName)
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Bounded settle: wait for the goto to finish (EOD coord
+                // property leaves Busy), then kill tracking.
+                for (var i = 0; i < 90; i++)
+                {
+                    await Task.Delay(1000);
+                    var d = _client?.GetDevice(deviceName);
+                    var eq = d?.Properties.TryGetValue("EQUATORIAL_EOD_COORD", out var p) == true ? p : null;
+                    if (eq == null || eq.State != IndiPropertyState.Busy) break;
+                }
+                await TelescopeTrackingAsync(deviceName, false, CancellationToken.None);
+                _log.LogInformation("Telescope: home settled on {Device}; tracking stopped", deviceName);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Telescope: home settle failed on {Device}", deviceName);
+            }
+        });
     }
 
     private static string EscapeXml(string s)

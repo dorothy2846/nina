@@ -362,7 +362,9 @@ public class TelescopeController : ControllerBase
             return StatusCode(503, new { success = false, message = "Telescope not connected" });
         if (_indi.IsTelescopeParked(selected.UniqueId))
             return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
-        await _indi.TelescopeFindHomeAsync(selected.UniqueId, HttpContext.RequestAborted);
+        var homed = await _indi.TelescopeFindHomeAsync(selected.UniqueId, HttpContext.RequestAborted);
+        if (!homed)
+            return StatusCode(501, new { success = false, message = "Mount driver does not support homing and site data for emulation is unavailable" });
         return Ok(new { success = true, message = "Home requested" });
     }
 
