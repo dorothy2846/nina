@@ -13,6 +13,7 @@ public static class PlatformPaths
 {
     public static bool IsLinux => RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
     public static bool IsMacOS => RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+    public static bool IsWindows => RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
     /// <summary>Short platform identifier for logs and `/api/v1/health` responses.</summary>
     public static string PlatformName

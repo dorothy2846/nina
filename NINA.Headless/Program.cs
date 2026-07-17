@@ -118,6 +118,7 @@ builder.Services.AddSingleton<CalibrationLibrary>();
 // polar-alignment request died with a DI 500 before reaching the action.
 builder.Services.AddSingleton(new NINA.Headless.Services.HeadlessAstapSolver(NINA.Headless.Services.PlatformPaths.AstapPath));
 builder.Services.AddSingleton<LiveStackService>();
+builder.Services.AddSingleton<NINA.Headless.Services.Phd2InstallerService>();
 builder.Services.AddHostedService<EquipmentStatusBroadcaster>();
 builder.Services.AddHostedService<AlpacaDiscoveryService>();
 

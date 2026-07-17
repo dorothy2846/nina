@@ -48,6 +48,11 @@ echo 'export DOTNET_ROOT=/usr/local/dotnet' >> /etc/environment
 # 4. INDI
 log "Installing INDI..."
 apt-get install -y -qq software-properties-common
+
+# PHD2 guiding (latest via upstream PPA) + xvfb for its headless X display
+add-apt-repository -y ppa:pch/phd2 || true
+apt-get update -qq
+apt-get install -y -qq phd2 xvfb
 add-apt-repository -y ppa:mutlaqja/ppa
 apt-get update -qq
 apt-get install -y -qq \

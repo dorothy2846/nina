@@ -60,8 +60,12 @@ public partial class Phd2Service
     public async Task<bool> EnsureStartedAsync(CancellationToken ct)
         => await EnsureStartedDetailedAsync(ct) == LaunchResult.Connected;
 
-    private enum InstallKind { MacApp, LinuxBinary }
+    private enum InstallKind { MacApp, LinuxBinary, WindowsExe }
     private record InstallInfo(string Path, InstallKind Kind);
+
+    /// <summary>Whether a PHD2 install is discoverable on this machine —
+    /// exposed for the installer service and /guider/install status.</summary>
+    public static bool IsInstalled => GetInstallPath() != null;
 
     private static InstallInfo? GetInstallPath()
     {
@@ -90,11 +94,29 @@ public partial class Phd2Service
                 if (File.Exists(p)) return new InstallInfo(p, InstallKind.LinuxBinary);
         }
 
+        // Windows installer default locations (InnoSetup: PHDGuiding2).
+        if (PlatformPaths.IsWindows)
+        {
+            var winCandidates = new[]
+            {
+                Environment.ExpandEnvironmentVariables(@"%ProgramFiles(x86)%\PHDGuiding2\phd2.exe"),
+                Environment.ExpandEnvironmentVariables(@"%ProgramFiles%\PHDGuiding2\phd2.exe"),
+            };
+            foreach (var p in winCandidates)
+                if (File.Exists(p)) return new InstallInfo(p, InstallKind.WindowsExe);
+        }
+
         return null;
     }
 
     private static bool IsPhdRunning()
     {
+        if (PlatformPaths.IsWindows)
+        {
+            try { return Process.GetProcessesByName("phd2").Length > 0; }
+            catch { return false; }
+        }
+
         // macOS process name is "PHD2" (capitalized from the app bundle's MacOS exec); Linux
         // distros ship the binary lowercase. pgrep -i handles both without branching.
         try
@@ -164,8 +186,78 @@ public partial class Phd2Service
 
         if (install.Kind == InstallKind.MacApp)
             await LaunchMacAsync(install.Path, ct);
+        else if (install.Kind == InstallKind.WindowsExe)
+            LaunchWindows(install.Path);
         else
             await LaunchLinuxAsync(install.Path, ct);
+    }
+
+    /// <summary>Windows launch — minimized so the desktop stays clean. Server
+    /// enablement (Tools → Enable Server) persists in PHD2's own config, so
+    /// after the user toggles it once, every subsequent auto-launch is
+    /// headless-equivalent. If it's off, connect returns the explanatory 503.</summary>
+    private void LaunchWindows(string exePath)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = exePath,
+                UseShellExecute = true,
+                WindowStyle = ProcessWindowStyle.Minimized
+            };
+            Process.Start(psi);
+            _log.LogInformation("PHD2 launched (Windows, minimized) from {Path}", exePath);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "PHD2 Windows launch failed");
+        }
+    }
+
+    /// <summary>Hard-recover a wedged PHD2: a modal dialog (bad gear config,
+    /// unexpected prompt) blocks the whole RPC event loop while the socket
+    /// stays open — the only way out is to kill and relaunch. Re-connects
+    /// equipment afterward so the guider is usable without user action.</summary>
+    public async Task<bool> ForceRestartAsync(CancellationToken ct)
+    {
+        _log.LogWarning("PHD2: force restart (RPC unresponsive — modal dialog or hang)");
+        await DisconnectAsync();
+        KillPhdProcess();
+        try { await Task.Delay(2000, ct); } catch (OperationCanceledException) { return false; }
+
+        var result = await EnsureStartedDetailedAsync(ct);
+        if (result != LaunchResult.Connected)
+        {
+            _log.LogWarning("PHD2: relaunch after force-kill failed ({Result})", result);
+            return false;
+        }
+        var gear = await SetAllConnectedAsync(true, ct);
+        if (!gear) _log.LogWarning("PHD2: restarted but equipment reconnect failed");
+        return true;
+    }
+
+    private void KillPhdProcess()
+    {
+        try
+        {
+            if (PlatformPaths.IsWindows)
+            {
+                foreach (var p in Process.GetProcessesByName("phd2"))
+                {
+                    try { p.Kill(entireProcessTree: true); } catch { }
+                }
+                return;
+            }
+            using var kill = Process.Start(new ProcessStartInfo
+            {
+                FileName = "/bin/sh",
+                Arguments = "-c \"pkill -9 -i -x phd2\"",
+                UseShellExecute = false
+            });
+            kill?.WaitForExit(3000);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "PHD2 kill failed"); }
     }
 
     private async Task LaunchMacAsync(string phdApp, CancellationToken ct)

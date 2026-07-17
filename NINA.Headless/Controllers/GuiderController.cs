@@ -89,7 +89,7 @@ public class GuiderController : ControllerBase
                 {
                     success = false,
                     code = "phd2-not-installed",
-                    message = "PHD2 not found in /Applications. Install once via `brew install --cask phd2` or download from openphdguiding.org.",
+                    message = "PHD2 is not installed on the server. POST /api/v1/guider/install to install it automatically, then retry.",
                     deviceId = request?.DeviceId ?? "phd2"
                 });
 
@@ -112,6 +112,24 @@ public class GuiderController : ControllerBase
                 });
         }
     }
+
+    /// <summary>Install PHD2 on the server (latest packaged release for the
+    /// platform: Linux PPA+apt(+xvfb), Windows winget, macOS brew). Runs in
+    /// the background — poll /guider/install/status.</summary>
+    [HttpPost("install")]
+    public IActionResult Install([FromServices] Phd2InstallerService installer)
+    {
+        if (Phd2Service.IsInstalled)
+            return Ok(new { success = true, message = "PHD2 already installed", installed = true });
+        var started = installer.TryBeginInstall();
+        return started
+            ? Ok(new { success = true, message = "PHD2 install started — poll /guider/install/status" })
+            : Ok(new { success = true, message = "Install already in progress — poll /guider/install/status" });
+    }
+
+    [HttpGet("install/status")]
+    public IActionResult InstallStatus([FromServices] Phd2InstallerService installer)
+        => Ok(installer.Status);
 
     [HttpPost("disconnect")]
     public async Task<IActionResult> Disconnect()

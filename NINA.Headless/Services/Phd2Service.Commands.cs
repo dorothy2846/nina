@@ -8,6 +8,20 @@ namespace NINA.Headless.Services;
 
 public partial class Phd2Service
 {
+    /// <summary>RPC-level liveness: a modal dialog blocks PHD2's event loop
+    /// while the TCP socket stays connected, so socket state alone lies.
+    /// A short-deadline get_app_state answers "is the loop actually alive".</summary>
+    public async Task<bool> ProbeResponsiveAsync(CancellationToken ct)
+    {
+        if (!IsConnectedToServer) return false;
+        try
+        {
+            await SendRpcAndAwaitAsync("get_app_state", Array.Empty<object>(), ct, TimeSpan.FromSeconds(5));
+            return true;
+        }
+        catch { return false; }
+    }
+
     public async Task<bool> SetAllConnectedAsync(bool connected, CancellationToken ct)
     {
         if (!await EnsureStartedAsync(ct)) return false;

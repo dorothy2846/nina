@@ -52,6 +52,11 @@ public class Phd2Watchdog : BackgroundService
         }
     }
 
+    /// Consecutive RPC probe failures while the socket looks fine. Two
+    /// misses (~20s) = a modal dialog or hard hang; kill + relaunch is the
+    /// only recovery that works for modals.
+    private int _unresponsiveStrikes;
+
     private async Task Tick(CancellationToken ct)
     {
         if (_phd2.IsConnectedToServer)
@@ -60,6 +65,25 @@ public class Phd2Watchdog : BackgroundService
             // Side-effect of an active connection: any caller that's
             // ever ensured-started is treated as "user wants this".
             if (_phd2.CurrentAppState != "Disconnected") _userStartedSession = true;
+
+            // Socket-alive is not loop-alive: probe the RPC event loop.
+            if (await _phd2.ProbeResponsiveAsync(ct))
+            {
+                _unresponsiveStrikes = 0;
+                return;
+            }
+            _unresponsiveStrikes++;
+            _log.LogWarning("Phd2Watchdog: RPC unresponsive (strike {N}/2) — modal dialog or hang suspected", _unresponsiveStrikes);
+            if (_unresponsiveStrikes >= 2)
+            {
+                _unresponsiveStrikes = 0;
+                try { _eventBus.Broadcast("Phd2Wedged", new { timestamp = DateTime.UtcNow }); }
+                catch (Exception ex) { _log.LogDebug(ex, "Phd2Wedged broadcast threw"); }
+                var recovered = await _phd2.ForceRestartAsync(ct);
+                _log.LogWarning("Phd2Watchdog: force restart {Result}", recovered ? "succeeded" : "failed");
+                try { _eventBus.Broadcast(recovered ? "Phd2Reconnected" : "Phd2Lost", new { timestamp = DateTime.UtcNow }); }
+                catch (Exception ex) { _log.LogDebug(ex, "broadcast threw"); }
+            }
             return;
         }
 
