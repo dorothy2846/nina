@@ -234,8 +234,19 @@ public partial class IndiDiscoveryService : BackgroundService
 
             try
             {
-                if (wantConn) await ConnectDeviceAsync(deviceName, CancellationToken.None);
-                else          await DisconnectDeviceAsync(deviceName, CancellationToken.None);
+                if (wantConn)
+                {
+                    var result = await ConnectDeviceAsync(deviceName, CancellationToken.None);
+                    // Failed attempts that return fast (device not published because the
+                    // driver is stopped/unplugged) would otherwise spin this loop at full
+                    // core until the intent changes. Pace the retry; the device coming
+                    // back re-arms us promptly via ReArmIntentWorkers anyway.
+                    if (!result.Ok) await Task.Delay(3000);
+                }
+                else
+                {
+                    await DisconnectDeviceAsync(deviceName, CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {
