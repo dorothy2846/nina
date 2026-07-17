@@ -15,7 +15,7 @@ namespace NINA.Headless.Indi;
 ///     top-level elements and parse each as its own fragment.
 ///   - See https://docs.indilib.org/protocol/INDI.pdf
 /// </summary>
-public sealed class IndiClient : IAsyncDisposable
+public sealed partial class IndiClient : IAsyncDisposable
 {
     private readonly string _host;
     private readonly int _port;
@@ -182,6 +182,8 @@ public sealed class IndiClient : IAsyncDisposable
 
     // -------- stream parser --------
 
+    private bool _pendingMayHoldElement;
+
     private async Task ReadLoopAsync(CancellationToken ct)
     {
         if (_stream == null) return;
@@ -202,20 +204,48 @@ public sealed class IndiClient : IAsyncDisposable
                 }
 
                 var chunk = Encoding.UTF8.GetString(buffer, 0, n);
-                pending.Append(chunk);
+
+                // BLOB fast path: while a <setBLOBVector><oneBLOB …> payload is
+                // in flight, chunks feed the incremental base64 decoder and never
+                // touch the StringBuilder/XElement machinery (which cost ~400 ms
+                // and several full-payload string copies per full-frame FITS).
+                var offset = 0;
+                if (_blobPhase != BlobPhase.Idle)
+                {
+                    offset = ConsumeBlob(chunk, 0);
+                    if (_blobLeftover is { Length: > 0 } leftover)
+                    {
+                        pending.Append(leftover);
+                        _blobLeftover = null;
+                    }
+                    if (offset >= chunk.Length && pending.Length == 0) continue;
+                }
+                if (offset < chunk.Length) pending.Append(chunk, offset, chunk.Length - offset);
 
                 // TryExtractElement is O(buffer) per call because it snapshots the whole
-                // StringBuilder. For huge BLOBs (single XML element ~20 MB) that's O(N²)
-                // across the read stream. Base64 payloads can't contain '>', so '>' in the
-                // new chunk is a reliable "maybe complete now" signal — skip the scan
-                // otherwise.
-                if (chunk.IndexOf('>') < 0) continue;
+                // StringBuilder. Base64 payloads can't contain '>', so '>' in the new
+                // chunk is a reliable "maybe complete now" signal — skip the scan
+                // otherwise (still relevant for non-BLOB traffic bursts).
+                if (chunk.IndexOf('>') < 0 && _blobPhase == BlobPhase.Idle && !_pendingMayHoldElement) continue;
 
-                while (TryExtractElement(pending, out var fragment))
+                while (true)
                 {
+                    if (TryEnterBlobMode(pending))
+                    {
+                        if (_blobLeftover is { Length: > 0 } tail)
+                        {
+                            pending.Append(tail);
+                            _blobLeftover = null;
+                            continue;
+                        }
+                        if (_blobPhase != BlobPhase.Idle) break; // payload continues next read
+                        continue; // vector fully contained in this chunk — keep extracting
+                    }
+                    if (!TryExtractElement(pending, out var fragment)) break;
                     try { HandleElement(fragment!); }
                     catch (Exception ex) { _log.LogWarning(ex, "INDI: failed to handle element"); }
                 }
+                _pendingMayHoldElement = pending.Length > 0;
             }
         }
         catch (OperationCanceledException) { exitReason = "cancelled"; }
