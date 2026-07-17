@@ -366,7 +366,14 @@ public class NinaStateService :
     {
         lock (_guideLock)
         {
-            GuideHistory.Add(new GuidePoint(guideStep.RADistanceRaw, guideStep.DECDistanceRaw, DateTime.UtcNow));
+            // PHD2 reports NaN distances around lost-star/settling states; a single
+            // non-finite double in GuideHistory makes SignalR's JSON serializer throw
+            // during OnConnectedAsync — the exact WS-handshake-death class fixed in
+            // the status builders. Sanitize at the source.
+            GuideHistory.Add(new GuidePoint(
+                Finite(guideStep.RADistanceRaw) ?? 0,
+                Finite(guideStep.DECDistanceRaw) ?? 0,
+                DateTime.UtcNow));
             if (GuideHistory.Count > 100)
             {
                 GuideHistory.RemoveAt(0);

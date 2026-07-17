@@ -283,7 +283,7 @@ public partial class IndiDiscoveryService : BackgroundService
     // ----- Camera exposure / image transfer -----
 
     private readonly ConcurrentDictionary<string, TaskCompletionSource<(byte[] bytes, string? format)>> _pendingExposure = new();
-    private bool _blobHandlerRegistered;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _exposureGates = new();
 
     // Tracks which devices we've already announced as connected. Lets DeviceConnected
     // fire exactly once per connect, including the boot path where the driver was

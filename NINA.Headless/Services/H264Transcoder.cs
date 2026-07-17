@@ -48,6 +48,12 @@ public class H264Transcoder : IAsyncDisposable
     /// ffmpeg stdin, or <see cref="DateTime.MinValue"/> until the first one.
     /// Watchdog input-side twin of <see cref="LastFrameAt"/>: output silence
     /// only implicates ffmpeg when input is actually flowing.</summary>
+    private long _lastPushAttemptTicks;
+    public DateTime LastPushAttemptAt
+    {
+        get { var t = Volatile.Read(ref _lastPushAttemptTicks); return t == 0 ? DateTime.MinValue : new DateTime(t, DateTimeKind.Utc); }
+    }
+
     public DateTime LastPushAt
     {
         get
@@ -191,6 +197,11 @@ public class H264Transcoder : IAsyncDisposable
     {
         var stdin = _stdin;
         if (stdin == null) return Task.CompletedTask;
+        // Attempt timestamp moves even when the slot is busy — the watchdog
+        // uses attempts-fresh-but-success-stale to tell "ffmpeg stopped
+        // draining stdin" (encoder wedge, restartable) apart from "no frames
+        // arriving" (producer stall, not the encoder's fault).
+        Volatile.Write(ref _lastPushAttemptTicks, DateTime.UtcNow.Ticks);
         if (Interlocked.CompareExchange(ref _pushInFlight, 1, 0) != 0) return Task.CompletedTask;
         return Task.Run(async () =>
         {

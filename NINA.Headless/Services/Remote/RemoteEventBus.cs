@@ -14,10 +14,15 @@ namespace NINA.Headless.Services.Remote;
 public class RemoteEventBus
 {
     private readonly IHubContext<NinaHub> _hub;
+    private readonly ILogger<RemoteEventBus> _log;
     private readonly List<IRemoteEventSink> _sinks = new();
     private readonly object _lock = new();
 
-    public RemoteEventBus(IHubContext<NinaHub> hub) { _hub = hub; }
+    public RemoteEventBus(IHubContext<NinaHub> hub, ILogger<RemoteEventBus> log)
+    {
+        _hub = hub;
+        _log = log;
+    }
 
     /// <summary>Attach a sink (typically <see cref="RendezvousClient"/>) so it receives
     /// the same event stream as SignalR subscribers.</summary>
@@ -35,7 +40,7 @@ public class RemoteEventBus
     /// side — we don't want a slow WebSocket to block per-tick state updates.</summary>
     public void Broadcast(string topic, object payload)
     {
-        _ = _hub.Clients.All.SendAsync(topic, payload);
+        Observe(_hub.Clients.All.SendAsync(topic, payload), topic);
         IRemoteEventSink[] snapshot;
         lock (_lock) { snapshot = _sinks.ToArray(); }
         foreach (var sink in snapshot)
@@ -49,13 +54,24 @@ public class RemoteEventBus
     /// doesn't have a group abstraction yet — we just mirror to every sink.</summary>
     public void BroadcastGroup(string group, string topic, object payload)
     {
-        _ = _hub.Clients.Group(group).SendAsync(topic, payload);
+        Observe(_hub.Clients.Group(group).SendAsync(topic, payload), topic);
         IRemoteEventSink[] snapshot;
         lock (_lock) { snapshot = _sinks.ToArray(); }
         foreach (var sink in snapshot)
         {
             try { sink.Emit(topic, payload); } catch { }
         }
+    }
+
+    /// <summary>Fire-and-forget with a visible failure path: a payload that fails
+    /// to serialize (e.g., a stray non-finite double) used to vanish as an
+    /// unobserved task exception — the message was silently lost on the WS side
+    /// while DataChannel sinks still delivered it.</summary>
+    private void Observe(Task send, string topic)
+    {
+        _ = send.ContinueWith(
+            t => _log.LogWarning(t.Exception?.GetBaseException(), "SignalR broadcast '{Topic}' failed", topic),
+            TaskContinuationOptions.OnlyOnFaulted);
     }
 }
 

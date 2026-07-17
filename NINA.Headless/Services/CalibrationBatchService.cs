@@ -118,22 +118,27 @@ public class CalibrationBatchService
                 await _indi.SetFrameTypeAsync(camera.UniqueId, req.ImageType, ct);
                 var (fitsBytes, _) = await _indi.CameraExposeAsync(camera.UniqueId, req.ExposureTime, ct);
 
+                // A PNG preview failure must not throw away the FITS — the frame is
+                // the product, the thumbnail is decoration. And the count only moves
+                // when the frame actually reached the store; the old code discarded
+                // the FITS on convert errors while still reporting it captured.
                 byte[] png;
                 try { png = FitsToPng.Convert(fitsBytes); }
-                catch { png = Array.Empty<byte>(); }
-
-                if (png.Length > 0)
+                catch (Exception ex)
                 {
-                    // Dark/Bias library is camera-scoped — stamp with the running camera.
-                    var entry = await _captures.SaveAsync(fitsBytes, png, new CaptureStore.SaveMetadata(
-                        ExposureSeconds: req.ExposureTime,
-                        Gain: req.Gain, Offset: req.Offset, Binning: req.Binning,
-                        ImageType: req.ImageType,
-                        CameraId: camera.UniqueId, CameraName: camera.Name));
-                    // Invalidate any cached master for this group so the next calibration
-                    // request rebuilds with the frame we just added.
-                    _library.NotifyCaptureAdded(entry);
+                    _log.LogWarning(ex, "Calibration: preview conversion failed for frame {N} — saving FITS with empty thumbnail", i + 1);
+                    png = Array.Empty<byte>();
                 }
+
+                // Dark/Bias library is camera-scoped — stamp with the running camera.
+                var entry = await _captures.SaveAsync(fitsBytes, png, new CaptureStore.SaveMetadata(
+                    ExposureSeconds: req.ExposureTime,
+                    Gain: req.Gain, Offset: req.Offset, Binning: req.Binning,
+                    ImageType: req.ImageType,
+                    CameraId: camera.UniqueId, CameraName: camera.Name));
+                // Invalidate any cached master for this group so the next calibration
+                // request rebuilds with the frame we just added.
+                _library.NotifyCaptureAdded(entry);
 
                 _framesCaptured = i + 1;
             }

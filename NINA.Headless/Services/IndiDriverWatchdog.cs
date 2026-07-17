@@ -131,7 +131,14 @@ public class IndiDriverWatchdog : BackgroundService
         // Stuck if BUSY persists past (initial duration + 60s margin) and
         // the countdown isn't decreasing meaningfully.
         var elapsed = (DateTime.UtcNow - st.StartedAt).TotalSeconds;
-        var timeoutBudget = Math.Max(60, st.InitialDurationSec + 60);
+        // No countdown data (driver omits/zeroes CCD_EXPOSURE_VALUE during BUSY)
+        // means we cannot distinguish a legitimate long sub from a wedge — a hard
+        // 60s budget was aborting every >60s exposure on such drivers. Without
+        // data we do not take destructive action; fall back to a 15-minute
+        // ceiling that no sane unattended sub exceeds.
+        var timeoutBudget = st.InitialDurationSec > 0
+            ? Math.Max(60, st.InitialDurationSec + 60)
+            : 900;
         if (elapsed < timeoutBudget) return;
 
         _log.LogWarning("DriverWatchdog: CCD_EXPOSURE on {Device} stuck BUSY for {Sec:F0}s — aborting + driver bounce",
@@ -437,26 +444,29 @@ public class IndiDriverWatchdog : BackgroundService
     /// kind + INDI device name so the iOS banner can name the fault.
     private void RecordHang(DeviceKind kind, string deviceName)
     {
-        var key = $"{kind}:{deviceName}";
-        if (!_hungHistory.TryGetValue(key, out var list))
+        lock (_busyTrack)
         {
-            list = new List<DateTime>();
-            _hungHistory[key] = list;
-        }
-        var now = DateTime.UtcNow;
-        list.Add(now);
-        // Trim entries older than the window so the count reflects "recent".
-        list.RemoveAll(t => now - t > RepeatWindow);
-        if (list.Count >= RepeatThreshold)
-        {
-            _log.LogError("DriverWatchdog: {Kind} {Device} has hung {N} times in {Win} min — likely hardware/USB issue",
-                kind, deviceName, list.Count, (int)RepeatWindow.TotalMinutes);
-            try { DriverChronicallyFailing?.Invoke(kind, deviceName, list.Count); }
-            catch (Exception ex) { _log.LogWarning(ex, "DriverChronicallyFailing handler threw"); }
-            // Reset the window so we re-arm rather than firing on every
-            // subsequent hang — the user got the signal, additional events
-            // are duplicates.
-            list.Clear();
+            var key = $"{kind}:{deviceName}";
+            if (!_hungHistory.TryGetValue(key, out var list))
+            {
+                list = new List<DateTime>();
+                _hungHistory[key] = list;
+            }
+            var now = DateTime.UtcNow;
+            list.Add(now);
+            // Trim entries older than the window so the count reflects "recent".
+            list.RemoveAll(t => now - t > RepeatWindow);
+            if (list.Count >= RepeatThreshold)
+            {
+                _log.LogError("DriverWatchdog: {Kind} {Device} has hung {N} times in {Win} min — likely hardware/USB issue",
+                    kind, deviceName, list.Count, (int)RepeatWindow.TotalMinutes);
+                try { DriverChronicallyFailing?.Invoke(kind, deviceName, list.Count); }
+                catch (Exception ex) { _log.LogWarning(ex, "DriverChronicallyFailing handler threw"); }
+                // Reset the window so we re-arm rather than firing on every
+                // subsequent hang — the user got the signal, additional events
+                // are duplicates.
+                list.Clear();
+            }
         }
     }
 

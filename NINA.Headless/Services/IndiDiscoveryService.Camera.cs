@@ -230,21 +230,34 @@ public partial class IndiDiscoveryService
         catch { /* not all drivers expose this — best-effort */ }
     }
 
+    // The client this handler is attached to. A reconnect creates a brand-new
+    // IndiClient with an empty event list; comparing instances (instead of a
+    // sticky bool, the old bug) re-registers on the new client — otherwise every
+    // capture after an indiserver bounce hung to its full timeout, forever.
+    // (Verified live: kill indiserver -> reconnect -> capture dead until restart.)
+    private IndiClient? _blobHandlerClient;
+    private readonly object _blobHandlerLock = new();
+
     private void EnsureBlobHandler()
     {
-        if (_blobHandlerRegistered || _client == null) return;
-        _client.BlobReceived += (device, prop, el, bytes, format) =>
+        var client = _client;
+        if (client == null) return;
+        lock (_blobHandlerLock)
         {
-            if (prop != "CCD1") return; // INDI convention: primary sensor BLOB property
-            // Streaming and still capture share CCD1. Stream frames carry ".stream" /
-            // ".stream_jpg" formats and belong to CameraStreamService — never to the
-            // exposure TCS. Without this filter an orphaned stream wedges the next
-            // capture: the stream BLOB resolves the TCS with garbage bytes, then the
-            // real .fits BLOB arrives with no waiter and is dropped.
-            if (format != null && format.StartsWith(".stream", StringComparison.Ordinal)) return;
-            if (_pendingExposure.TryRemove(device, out var tcs)) tcs.TrySetResult((bytes, format));
-        };
-        _blobHandlerRegistered = true;
+            if (ReferenceEquals(_blobHandlerClient, client)) return;
+            client.BlobReceived += (device, prop, el, bytes, format) =>
+            {
+                if (prop != "CCD1") return; // INDI convention: primary sensor BLOB property
+                // Streaming and still capture share CCD1. Stream frames carry ".stream" /
+                // ".stream_jpg" formats and belong to CameraStreamService — never to the
+                // exposure TCS. Without this filter an orphaned stream wedges the next
+                // capture: the stream BLOB resolves the TCS with garbage bytes, then the
+                // real .fits BLOB arrives with no waiter and is dropped.
+                if (format != null && format.StartsWith(".stream", StringComparison.Ordinal)) return;
+                if (_pendingExposure.TryRemove(device, out var tcs)) tcs.TrySetResult((bytes, format));
+            };
+            _blobHandlerClient = client;
+        }
     }
 
     /// <summary>Start an exposure and await the BLOB delivery. Returns the raw bytes (usually
@@ -254,6 +267,14 @@ public partial class IndiDiscoveryService
     {
         var client = _client ?? throw new InvalidOperationException("INDI client not connected");
         EnsureBlobHandler();
+
+        // One exposure per device at a time. Two overlapping captures used to
+        // overwrite each other's completion source: the loser hung to its full
+        // timeout and its abort then killed the winner's in-flight exposure.
+        var gate = _exposureGates.GetOrAdd(deviceName, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
 
         // Ensure indiserver streams BLOBs for this device (off by default).
         try { await client.EnableBlobAsync(deviceName, ct); } catch { }
@@ -288,8 +309,15 @@ public partial class IndiDiscoveryService
         }
         finally
         {
+            // Remove OUR completion source only — by this point no other call
+            // can own the slot (serialized above), but the guard is cheap and
+            // prevents a late BLOB from a timed-out capture resolving the NEXT
+            // capture with the previous exposure's image.
             _pendingExposure.TryRemove(deviceName, out _);
         }
+
+        }
+        finally { gate.Release(); }
     }
 
     public async Task SetGainAsync(string deviceName, int gain, CancellationToken ct)

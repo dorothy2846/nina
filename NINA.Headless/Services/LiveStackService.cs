@@ -15,7 +15,10 @@ public class LiveStackService
     private bool _active;
     private int _width, _height;
     private List<StarDetector.Star>? _referenceStars;
-    private float[]? _sum;             // running sum of warped calibrated pixels
+    // double accumulator: float's 24-bit mantissa stops absorbing per-frame
+    // additions once a bright pixel's sum passes ~16.7M (~256 full-well frames)
+    // — exactly the deep stacks where precision matters.
+    private double[]? _sum;             // running sum of warped calibrated pixels
     private int[]? _count;             // per-pixel contribution count (edges see fewer frames)
     private int _framesAccepted;
     private int _framesRejected;
@@ -121,7 +124,7 @@ public class LiveStackService
                     _width = px.Width;
                     _height = px.Height;
                     _referenceStars = stars;
-                    _sum = new float[px.Pixels.Length];
+                    _sum = new double[px.Pixels.Length];
                     _count = new int[px.Pixels.Length];
                     for (int i = 0; i < px.Pixels.Length; i++)
                     {
@@ -178,7 +181,7 @@ public class LiveStackService
             for (int i = 0; i < _sum.Length; i++)
             {
                 var c = _count[i];
-                snapshot[i] = c > 0 ? _sum[i] / c : 0f;
+                snapshot[i] = c > 0 ? (float)(_sum[i] / c) : 0f;
             }
             w = _width;
             h = _height;

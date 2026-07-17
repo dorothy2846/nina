@@ -20,6 +20,7 @@ namespace NINA.Headless.Services;
 public class DriverWatchdogService : BackgroundService
 {
     private readonly CameraStreamService _stream;
+    private readonly Phd2Service _phd2;
     private readonly H264Transcoder _h264;
     private readonly ILogger<DriverWatchdogService> _log;
 
@@ -37,8 +38,9 @@ public class DriverWatchdogService : BackgroundService
 
     private readonly Dictionary<int, Queue<double>> _cpuHistory = new();
 
-    public DriverWatchdogService(CameraStreamService stream, H264Transcoder h264, ILogger<DriverWatchdogService> log)
+    public DriverWatchdogService(CameraStreamService stream, H264Transcoder h264, Phd2Service phd2, ILogger<DriverWatchdogService> log)
     {
+        _phd2 = phd2;
         _stream = stream;
         _h264 = h264;
         _log = log;
@@ -67,9 +69,14 @@ public class DriverWatchdogService : BackgroundService
         var samples = SnapshotIndiDrivers();
         var seenPids = new HashSet<int>();
 
-        // Streaming exemption is global: cost of a false negative is one
-        // missed minute, cost of a false positive is killing a live frame.
-        var streamingActive = _stream.IsRunning;
+        // Exemption is global: cost of a false negative is one missed minute,
+        // cost of a false positive is killing a live frame — or, worse, the
+        // guide camera mid-session: a PHD2 loop of short exposures holds >15%
+        // CPU with the live-view stream off, which used to get the guide
+        // driver SIGKILLed two minutes into autoguiding.
+        var phd2State = _phd2.CurrentAppState;
+        var streamingActive = _stream.IsRunning
+            || phd2State is "Guiding" or "Calibrating" or "Looping";
 
         foreach (var s in samples)
         {
@@ -138,8 +145,28 @@ public class DriverWatchdogService : BackgroundService
         if (_h264.IsRunning)
         {
             var lastPush = _h264.LastPushAt;
+            var lastAttempt = _h264.LastPushAttemptAt;
             if (lastPush == DateTime.MinValue || now - lastPush > TranscoderStallThreshold)
             {
+                // Frames ARE arriving (fresh attempts) but none complete a push:
+                // ffmpeg stopped draining stdin — the classic encoder wedge. The
+                // old classifier read only the frozen success clock and called
+                // this a producer stall forever, so the most common wedge mode
+                // never triggered recovery.
+                if (lastAttempt != DateTime.MinValue && now - lastAttempt < TranscoderStallThreshold)
+                {
+                    _transcoderStrikes++;
+                    _log.LogWarning(
+                        "DriverWatchdog: frames arriving but none reach ffmpeg (stdin blocked) — encoder wedge, strike {Strikes}",
+                        _transcoderStrikes);
+                    if (_transcoderStrikes >= 2)
+                    {
+                        _transcoderStrikes = 0;
+                        _log.LogWarning("DriverWatchdog: restarting wedged transcoder");
+                        _ = Task.Run(() => _h264.RestartAsync());
+                    }
+                    return;
+                }
                 _log.LogWarning(
                     "DriverWatchdog: stream is active but no frames have reached ffmpeg for {Silence}s — upstream producer stall, not restarting the encoder",
                     lastPush == DateTime.MinValue ? "∞" : ((int)(now - lastPush).TotalSeconds).ToString());
@@ -192,9 +219,10 @@ public class DriverWatchdogService : BackgroundService
             RedirectStandardOutput = true,
             UseShellExecute = false,
         };
-        var p = Process.Start(psi);
+        using var p = Process.Start(psi);
         if (p == null) return Array.Empty<DriverSample>();
         var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit(3000);
 
         var now = DateTime.UtcNow;
         var result = new List<DriverSample>();

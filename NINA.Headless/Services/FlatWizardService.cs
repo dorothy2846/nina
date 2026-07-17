@@ -270,34 +270,16 @@ public class FlatWizardService
     /// on a full-resolution frame. Good enough to drive the exposure search.</summary>
     private static double ComputeMeanAdu(byte[] fitsBytes)
     {
-        // Find data offset by scanning header for END card.
-        int dataOffset = 0;
-        int offset = 0;
-        while (offset < fitsBytes.Length)
-        {
-            var blockEnd = offset + 2880;
-            for (int rec = offset; rec < blockEnd && rec + 80 <= fitsBytes.Length; rec += 80)
-            {
-                if (fitsBytes[rec] == 'E' && fitsBytes[rec + 1] == 'N' && fitsBytes[rec + 2] == 'D')
-                {
-                    dataOffset = blockEnd;
-                    goto foundEnd;
-                }
-            }
-            offset = blockEnd;
-        }
-        foundEnd:
-        if (dataOffset == 0) return 0;
-        var len = fitsBytes.Length - dataOffset;
-        if (len < 2) return 0;
-        double sum = 0;
-        long n = 0;
-        for (int i = dataOffset; i + 1 < fitsBytes.Length; i += 128)
-        {
-            var v = (ushort)((fitsBytes[i] << 8) | fitsBytes[i + 1]);
-            sum += v;
-            n++;
-        }
+        // Route through FitsReader so BZERO/BSCALE are honoured. The old code
+        // read raw bytes as UNSIGNED big-endian shorts, but INDI/ZWO/PlayerOne
+        // write BITPIX=16 signed with BZERO=32768 — the raw stored value is
+        // physical-32768, so the unsigned read flipped the top bit and the
+        // exposure search chased a meaningless number (flats pinned at
+        // MinExposure). Sample every 64th pixel; that is plenty for a mean.
+        var (px, w, h) = FitsReader.Read(fitsBytes);
+        if (px.Length == 0) return 0;
+        double sum = 0; long n = 0;
+        for (int i = 0; i < px.Length; i += 64) { sum += px[i]; n++; }
         return n > 0 ? sum / n : 0;
     }
 
