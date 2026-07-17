@@ -54,7 +54,17 @@ public class IndiServerManager : BackgroundService
             try
             {
                 StartServer();
-                await Task.Delay(Timeout.Infinite, stoppingToken);
+                // Supervise the child: if indiserver dies (crash, OOM-kill, driver taking
+                // the parent down), relaunch it — with the dynamic driver set intact, so
+                // user-started drivers come back too. The INDI client's reconnect loop +
+                // RestoreIntentWorkers then re-connect the devices, making an indiserver
+                // crash fully self-healing instead of dead-until-app-restart.
+                var proc = _proc;
+                if (proc == null) throw new InvalidOperationException("indiserver process handle missing after start");
+                await proc.WaitForExitAsync(stoppingToken);
+                if (stoppingToken.IsCancellationRequested) break;
+                _log.LogWarning("indiserver exited unexpectedly (code {Code}); restart in 3s", proc.ExitCode);
+                try { await Task.Delay(TimeSpan.FromSeconds(3), stoppingToken); } catch { break; }
             }
             catch (OperationCanceledException) { break; }
             catch (Exception ex)

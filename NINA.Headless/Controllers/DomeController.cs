@@ -88,6 +88,7 @@ public class DomeController : ControllerBase
     {
         var selected = _equipment.GetSelected(DeviceKind.Dome);
         if (selected?.Provider == EquipmentProvider.Indi)
+            _indi.RecordConnectionIntent(selected.UniqueId, false);
             await _indi.DisconnectDeviceAsync(selected.UniqueId, HttpContext.RequestAborted);
         _equipment.Disconnect(DeviceKind.Dome);
         return Ok(new { success = true, message = "Dome disconnected" });

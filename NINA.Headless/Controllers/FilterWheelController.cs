@@ -82,6 +82,7 @@ public class FilterWheelController : ControllerBase
     {
         var selected = _equipment.GetSelected(DeviceKind.FilterWheel);
         if (selected?.Provider == EquipmentProvider.Indi)
+            _indi.RecordConnectionIntent(selected.UniqueId, false);
             await _indi.DisconnectDeviceAsync(selected.UniqueId, HttpContext.RequestAborted);
         _equipment.Disconnect(DeviceKind.FilterWheel);
         _lastAppliedPosition = null;

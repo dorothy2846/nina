@@ -147,6 +147,20 @@ public partial class IndiDiscoveryService : BackgroundService
         _log.LogInformation("INDI rescan requested — client disposed, loop will reconnect");
     }
 
+    /// <summary>Record the user's connect/disconnect intent WITHOUT spawning a worker —
+    /// for controllers that actuate CONNECTION synchronously themselves (camera, focuser,
+    /// filter wheel, dome, rotator). The recorded intent is what re-arms the device after
+    /// a driver restart (<see cref="ReArmIntentWorkers"/>) and feeds the bounded status
+    /// fallback (<see cref="EffectiveConnected"/>); without it those protections only
+    /// covered the telescope, whose controller goes through the intent worker.</summary>
+    public void RecordConnectionIntent(string deviceName, bool connected)
+    {
+        lock (_intentLock)
+        {
+            _intent[deviceName] = connected ? ConnectionIntent.Connected : ConnectionIntent.Disconnected;
+        }
+    }
+
     /// <summary>Ask the worker to drive <paramref name="deviceName"/> toward the given state.
     /// Returns immediately; the background task converges even if intents change mid-flight.</summary>
     public void RequestConnectionIntent(string deviceName, bool connected)

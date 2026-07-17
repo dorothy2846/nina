@@ -152,6 +152,7 @@ public partial class CameraController : ControllerBase
         if (selected?.Provider == CameraProvider.Indi)
         {
             var result = await _indi.ConnectCameraAsync(selected.UniqueId, HttpContext.RequestAborted);
+            _indi.RecordConnectionIntent(selected.UniqueId, result.Ok);
             if (!result.Ok)
             {
                 _cameraSelection.Disconnect();
@@ -186,6 +187,7 @@ public partial class CameraController : ControllerBase
         var selected = _cameraSelection.GetSelected();
         if (selected?.Provider == CameraProvider.Indi)
         {
+            _indi.RecordConnectionIntent(selected.UniqueId, false);
             await _indi.DisconnectCameraAsync(selected.UniqueId, HttpContext.RequestAborted);
         }
 

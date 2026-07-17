@@ -63,6 +63,7 @@ public class FocuserController : ControllerBase
     {
         var selected = _equipment.GetSelected(DeviceKind.Focuser);
         if (selected?.Provider == EquipmentProvider.Indi)
+            _indi.RecordConnectionIntent(selected.UniqueId, false);
             await _indi.DisconnectDeviceAsync(selected.UniqueId, HttpContext.RequestAborted);
         _equipment.Disconnect(DeviceKind.Focuser);
         return Ok(new { success = true, message = "Focuser disconnected" });

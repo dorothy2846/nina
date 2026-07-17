@@ -33,6 +33,10 @@ public static class IndiDeviceConnectFlow
             if (selected?.Provider == EquipmentProvider.Indi)
             {
                 var result = await indi.ConnectDeviceAsync(selected.UniqueId, ct);
+                // Intent mirrors what we told the user: connected on success, not-connected
+                // on a surfaced failure (a background retry after an error we already
+                // reported would be surprising).
+                indi.RecordConnectionIntent(selected.UniqueId, result.Ok);
                 if (!result.Ok)
                 {
                     equipment.Disconnect(kind);
@@ -74,7 +78,10 @@ public static class IndiDeviceConnectFlow
         try
         {
             if (selected?.Provider == EquipmentProvider.Indi)
+            {
+                indi.RecordConnectionIntent(selected.UniqueId, false);
                 await indi.DisconnectDeviceAsync(selected.UniqueId, ct);
+            }
             else if (selected?.Provider == EquipmentProvider.Alpaca && alpaca != null)
                 await alpaca.SetConnectedAsync(selected, false, ct);
         }

@@ -72,6 +72,7 @@ public class RotatorController : ControllerBase
     {
         var selected = _equipment.GetSelected(DeviceKind.Rotator);
         if (selected?.Provider == EquipmentProvider.Indi)
+            _indi.RecordConnectionIntent(selected.UniqueId, false);
             await _indi.DisconnectDeviceAsync(selected.UniqueId, HttpContext.RequestAborted);
         _equipment.Disconnect(DeviceKind.Rotator);
         return Ok(new { success = true, message = "Rotator disconnected" });
