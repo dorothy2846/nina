@@ -36,6 +36,51 @@ public class PolarAlignmentMath
         public string AzimuthCorrectionHint { get; set; } = string.Empty;
     }
 
+    // ----- Pure astro helpers (no NINA.Astrometry / SOFA native dependency:
+    // the SOFA type initializer throws on macOS where the native lib isn't
+    // bundled, and it took the whole polar-alignment routine down with it) --
+
+    public static double JulianDate(DateTime utc) =>
+        (utc - new DateTime(2000, 1, 1, 12, 0, 0, DateTimeKind.Utc)).TotalDays + 2451545.0;
+
+    /// <summary>Local sidereal time in HOURS (IAU-1982 GMST, arcsecond-class).</summary>
+    public static double LocalSiderealTimeHours(DateTime utc, double longitudeDeg)
+    {
+        var d = JulianDate(utc) - 2451545.0;
+        var t = d / 36525.0;
+        var gmst = 280.46061837 + 360.98564736629 * d + 0.000387933 * t * t - t * t * t / 38710000.0;
+        var lst = (gmst + longitudeDeg) % 360.0;
+        if (lst < 0) lst += 360.0;
+        return lst / 15.0;
+    }
+
+    /// <summary>Hour angle in HOURS, wrapped to (−12, +12].</summary>
+    public static double HourAngleHours(double lstHours, double raHours)
+    {
+        var ha = (lstHours - raHours) % 24.0;
+        if (ha > 12) ha -= 24;
+        if (ha <= -12) ha += 24;
+        return ha;
+    }
+
+    public static double AltitudeDeg(double haDeg, double latDeg, double decDeg)
+    {
+        double haR = haDeg * Math.PI / 180, latR = latDeg * Math.PI / 180, decR = decDeg * Math.PI / 180;
+        var sinAlt = Math.Sin(decR) * Math.Sin(latR) + Math.Cos(decR) * Math.Cos(latR) * Math.Cos(haR);
+        return Math.Asin(Math.Clamp(sinAlt, -1, 1)) * 180 / Math.PI;
+    }
+
+    /// <summary>Azimuth in degrees from NORTH, clockwise.</summary>
+    public static double AzimuthDeg(double haDeg, double latDeg, double decDeg)
+    {
+        double haR = haDeg * Math.PI / 180, latR = latDeg * Math.PI / 180, decR = decDeg * Math.PI / 180;
+        var az = Math.Atan2(
+            -Math.Cos(decR) * Math.Sin(haR),
+            Math.Sin(decR) * Math.Cos(latR) - Math.Cos(decR) * Math.Cos(haR) * Math.Sin(latR));
+        var deg = az * 180 / Math.PI;
+        return deg < 0 ? deg + 360 : deg;
+    }
+
     /// <summary>
     /// Calculates the Polar Alignment Error using 3 Plate Solved points.
     /// Points should be obtained by slewing the RA axis.
@@ -73,17 +118,16 @@ public class PolarAlignmentMath
         var raAxisRads = Math.Atan2(normal.Y, normal.X);
         if (raAxisRads < 0) raAxisRads += 2 * Math.PI;
 
-        double axisDec = AstroUtil.ToDegree(decAxisRads);
-        double axisRa = AstroUtil.DegreesToHours(AstroUtil.ToDegree(raAxisRads));
+        double axisDec = decAxisRads * 180.0 / Math.PI;
+        double axisRa = raAxisRads * 180.0 / Math.PI / 15.0;
 
         // 4. Calculate Alt/Az coordinates of the physical axis TODAY at the CURRENT Sidereal Time
         DateTime nowUtc = DateTime.UtcNow;
-        double lst = AstroUtil.GetLocalSiderealTime(nowUtc, longitudeDegrees);
-        double hourAngleHours = AstroUtil.GetHourAngle(lst, axisRa);
-        double hourAngleAngles = hourAngleHours * 15.0; // Convert hours to degrees for AstroUtil
+        double lst = LocalSiderealTimeHours(nowUtc, longitudeDegrees);
+        double hourAngleAngles = HourAngleHours(lst, axisRa) * 15.0;
 
-        double axisAlt = AstroUtil.GetAltitude(hourAngleAngles, latitudeDegrees, axisDec);
-        double axisAz = AstroUtil.GetAzimuth(hourAngleAngles, axisAlt, latitudeDegrees, axisDec);
+        double axisAlt = AltitudeDeg(hourAngleAngles, latitudeDegrees, axisDec);
+        double axisAz = AzimuthDeg(hourAngleAngles, latitudeDegrees, axisDec);
 
         // 5. Calculate the Alt/Az of the TRUE Celestial Pole (NCP or SCP)
         double poleAlt = Math.Abs(latitudeDegrees);
@@ -145,8 +189,8 @@ public class PolarAlignmentMath
 
     private static Vector3D SphericalToCartesian(double raHours, double decDegrees)
     {
-        double raRads = AstroUtil.ToRadians(AstroUtil.HoursToDegrees(raHours));
-        double decRads = AstroUtil.ToRadians(decDegrees);
+        double raRads = raHours * 15.0 * Math.PI / 180.0;
+        double decRads = decDegrees * Math.PI / 180.0;
 
         return new Vector3D(
             Math.Cos(decRads) * Math.Cos(raRads),

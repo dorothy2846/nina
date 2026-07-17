@@ -135,6 +135,17 @@ public class PolarAlignmentController : ControllerBase
             double slewDirHours = 1.0;
             double? nextHintRa = null;
 
+            // Leg-1 hint: the mount's own reported position (JNOW → J2000 for
+            // ASTAP). A near solve is ~100× faster than blind, and the mount
+            // usually knows where it points to well within the 15° search
+            // radius. Blind solve remains the fallback.
+            double leg1HintRa = double.NaN, leg1HintDec = double.NaN;
+            var tinfo = _state.TelescopeInfo;
+            if (tinfo != null && (tinfo.RightAscension != 0 || tinfo.Declination != 0))
+            {
+                (leg1HintRa, leg1HintDec) = ToJ2000(tinfo.RightAscension, tinfo.Declination);
+            }
+
             for (int i = 0; i < 3; i++)
             {
                 lock (SyncRoot) { _step = i + 1; }
@@ -153,25 +164,36 @@ public class PolarAlignmentController : ControllerBase
                 var focalLength = ResolveFocalLength();
                 var pixelSize = _state.CameraInfo?.PixelSize ?? 3.76;
                 var solve = await _solver.SolveAsync(tempImage, focalLength, pixelSize,
-                    nextHintRa ?? double.NaN, i == 0 ? double.NaN : decPts[i - 1]);
+                    i == 0 ? leg1HintRa : nextHintRa ?? double.NaN,
+                    i == 0 ? leg1HintDec : decPts[i - 1]);
 
-                if (!solve.Success && i == 0)
+                if (!solve.Success)
                 {
-                    // Fallback to Blind Solve on step 1
+                    // Blind fallback on EVERY leg, not just the first: a bad
+                    // hint (mount pointing model, wrong profile focal length)
+                    // shouldn't abort the routine when a full search can
+                    // still recover the frame.
                     solve = await _solver.SolveAsync(tempImage, focalLength, pixelSize);
                 }
 
                 TryDeleteTemp(tempImage);
                 if (!solve.Success) throw new Exception($"Solving failed at step {i + 1}");
 
-                raPts[i] = solve.Coordinates.RA;
-                decPts[i] = solve.Coordinates.Dec;
+                // ASTAP solves against a J2000 catalog, but everything below
+                // (LST, hour angle, alt/az, the pole itself) is epoch-of-date.
+                // Feeding J2000 into JNOW math shifted the derived pole by the
+                // accumulated precession (~9′ in 2026) — the same order as the
+                // errors being measured.
+                var jnow = ToJnow(solve.Coordinates.RA, solve.Coordinates.Dec);
+                raPts[i] = jnow.RaHours;
+                decPts[i] = jnow.DecDeg;
+                Console.WriteLine($"[PolarAlign] leg {i + 1} solved: J2000 {solve.Coordinates.RA:F4}h {solve.Coordinates.Dec:F4}d -> JNOW {jnow.RaHours:F4}h {jnow.DecDeg:F4}d");
 
                 if (i == 0)
                 {
                     // Pick the direction that moves |HA| AWAY from zero.
-                    double lstNow = AstroUtil.GetLocalSiderealTime(DateTime.UtcNow, longitude);
-                    double ha1 = AstroUtil.GetHourAngle(lstNow, raPts[0]);
+                    double lstNow = PolarAlignmentMath.LocalSiderealTimeHours(DateTime.UtcNow, longitude);
+                    double ha1 = PolarAlignmentMath.HourAngleHours(lstNow, raPts[0]);
                     // West of meridian (HA>0): decreasing RA increases HA.
                     slewDirHours = ha1 >= 0 ? -1.0 : 1.0;
                 }
@@ -195,11 +217,10 @@ public class PolarAlignmentController : ControllerBase
                     latitude, longitude);
                 
                 DateTime nowUtc = DateTime.UtcNow;
-                double lst = AstroUtil.GetLocalSiderealTime(nowUtc, longitude);
-                double hourAngleHours = AstroUtil.GetHourAngle(lst, raPts[2]);
-                double hourAngleDeg = hourAngleHours * 15.0;
-                _baseAlt3 = AstroUtil.GetAltitude(hourAngleDeg, latitude, decPts[2]);
-                _baseAz3 = AstroUtil.GetAzimuth(hourAngleDeg, _baseAlt3, latitude, decPts[2]);
+                double lst = PolarAlignmentMath.LocalSiderealTimeHours(nowUtc, longitude);
+                double hourAngleDeg = PolarAlignmentMath.HourAngleHours(lst, raPts[2]) * 15.0;
+                _baseAlt3 = PolarAlignmentMath.AltitudeDeg(hourAngleDeg, latitude, decPts[2]);
+                _baseAz3 = PolarAlignmentMath.AzimuthDeg(hourAngleDeg, latitude, decPts[2]);
                 
                 _completed = true;
             }
@@ -234,15 +255,17 @@ public class PolarAlignmentController : ControllerBase
                 if (solve.Success)
                 {
                     consecutiveFailures = 0;
+                    // Hints stay in J2000 — they go straight back to ASTAP.
                     hintRa = solve.Coordinates.RA;
                     hintDec = solve.Coordinates.Dec;
 
+                    // Math runs epoch-of-date (see measurement loop).
+                    var jnowLive = ToJnow(solve.Coordinates.RA, solve.Coordinates.Dec);
                     DateTime nowUtc = DateTime.UtcNow;
-                    double lst = AstroUtil.GetLocalSiderealTime(nowUtc, longitude);
-                    double hourAngleHours = AstroUtil.GetHourAngle(lst, solve.Coordinates.RA);
-                    double hourAngleDeg = hourAngleHours * 15.0;
-                    double curAlt = AstroUtil.GetAltitude(hourAngleDeg, latitude, solve.Coordinates.Dec);
-                    double curAz = AstroUtil.GetAzimuth(hourAngleDeg, curAlt, latitude, solve.Coordinates.Dec);
+                    double lst = PolarAlignmentMath.LocalSiderealTimeHours(nowUtc, longitude);
+                    double hourAngleDeg = PolarAlignmentMath.HourAngleHours(lst, jnowLive.RaHours) * 15.0;
+                    double curAlt = PolarAlignmentMath.AltitudeDeg(hourAngleDeg, latitude, jnowLive.DecDeg);
+                    double curAz = PolarAlignmentMath.AzimuthDeg(hourAngleDeg, latitude, jnowLive.DecDeg);
 
                     // How much did the physical knobs move the scope?
                     double deltaAltArgMin = (curAlt - _baseAlt3) * 60.0;
@@ -310,6 +333,78 @@ public class PolarAlignmentController : ControllerBase
         var tempImage = Path.Combine(tempDir, $"pa_{Guid.NewGuid()}.{ext}");
         await System.IO.File.WriteAllBytesAsync(tempImage, bytes, token);
         return tempImage;
+    }
+
+    /// <summary>J2000 (plate-solve frame) → epoch-of-date for LST/alt-az math.
+    /// NINA's Coordinates.Transform needs the native SOFA library, which the
+    /// bundle only carries for win/linux — on macOS its type initializer
+    /// throws, so we fall back to a manual IAU-1976 precession (arcsecond
+    /// accuracy; the errors measured here are arcminutes).</summary>
+    private static bool _sofaBroken;
+    private static (double RaHours, double DecDeg) ToJnow(double raHours, double decDeg)
+    {
+        if (!_sofaBroken)
+        {
+            try
+            {
+                var c = new Coordinates(raHours, decDeg, Epoch.J2000, Coordinates.RAType.Hours).Transform(Epoch.JNOW);
+                return (c.RA, c.Dec);
+            }
+            catch (TypeInitializationException) { _sofaBroken = true; }
+        }
+        return Precess(raHours, decDeg, toDate: true);
+    }
+
+    /// <summary>JNOW → J2000 for ASTAP hints (inverse of <see cref="ToJnow"/>).</summary>
+    private static (double RaHours, double DecDeg) ToJ2000(double raHours, double decDeg)
+    {
+        if (!_sofaBroken)
+        {
+            try
+            {
+                var c = new Coordinates(raHours, decDeg, Epoch.JNOW, Coordinates.RAType.Hours).Transform(Epoch.J2000);
+                return (c.RA, c.Dec);
+            }
+            catch (TypeInitializationException) { _sofaBroken = true; }
+        }
+        return Precess(raHours, decDeg, toDate: false);
+    }
+
+    /// <summary>IAU-1976 precession (ζ, z, θ rotation chain), J2000 ↔ date.</summary>
+    private static (double RaHours, double DecDeg) Precess(double raHours, double decDeg, bool toDate)
+    {
+        var jd = PolarAlignmentMath.JulianDate(DateTime.UtcNow);
+        var t = (jd - 2451545.0) / 36525.0;
+        var zeta = (2306.2181 * t + 0.30188 * t * t) / 3600.0 * Math.PI / 180.0;
+        var z = (2306.2181 * t + 1.09468 * t * t) / 3600.0 * Math.PI / 180.0;
+        var theta = (2004.3109 * t - 0.42665 * t * t) / 3600.0 * Math.PI / 180.0;
+
+        var ra = raHours * 15.0 * Math.PI / 180.0;
+        var dec = decDeg * Math.PI / 180.0;
+        var v = new[] { Math.Cos(dec) * Math.Cos(ra), Math.Cos(dec) * Math.Sin(ra), Math.Sin(dec) };
+
+        double[] Rz(double a, double[] u) => new[]
+        {
+            Math.Cos(a) * u[0] + Math.Sin(a) * u[1],
+            -Math.Sin(a) * u[0] + Math.Cos(a) * u[1],
+            u[2]
+        };
+        double[] Ry(double a, double[] u) => new[]
+        {
+            Math.Cos(a) * u[0] - Math.Sin(a) * u[2],
+            u[1],
+            Math.Sin(a) * u[0] + Math.Cos(a) * u[2]
+        };
+
+        // J2000→date: Rz(−z)·Ry(θ)·Rz(−ζ); date→J2000 is the transpose chain.
+        var w = toDate
+            ? Rz(-z, Ry(theta, Rz(-zeta, v)))
+            : Rz(zeta, Ry(-theta, Rz(z, v)));
+
+        var outDec = Math.Asin(Math.Clamp(w[2], -1, 1)) * 180.0 / Math.PI;
+        var outRa = Math.Atan2(w[1], w[0]) * 180.0 / Math.PI;
+        if (outRa < 0) outRa += 360;
+        return (outRa / 15.0, outDec);
     }
 
     private static void TryDeleteTemp(string path)
