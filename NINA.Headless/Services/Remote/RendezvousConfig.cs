@@ -52,7 +52,7 @@ public class RendezvousConfigStore
         }
         catch (Exception ex) { _log.LogWarning(ex, "Failed to read rendezvous config; generating defaults"); }
 
-        var fresh = new RendezvousConfig("wss://astellar.koreasouth.cloudapp.azure.com", machineId, Enabled: true);
+        var fresh = new RendezvousConfig("wss://astellar-rdv.koreasouth.cloudapp.azure.com", machineId, Enabled: true);
         Save(fresh);
         _cached = fresh;
         return fresh;
