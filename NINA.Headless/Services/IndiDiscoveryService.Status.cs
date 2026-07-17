@@ -88,6 +88,15 @@ public partial class IndiDiscoveryService
             ? slewCheck.State == IndiPropertyState.Busy
             : null;
 
+        // Manual axis motion (direction-pad hold). Distinct from `slewing`
+        // (goto): the iOS 3D uses it to release its pole rest-pose snap the
+        // moment the user starts nudging, so real axis motion renders.
+        bool moving = false;
+        if (dev.Properties.TryGetValue("TELESCOPE_MOTION_NS", out var mns))
+            moving |= mns["MOTION_NORTH"]?.ValueOn == true || mns["MOTION_SOUTH"]?.ValueOn == true;
+        if (dev.Properties.TryGetValue("TELESCOPE_MOTION_WE", out var mwe))
+            moving |= mwe["MOTION_WEST"]?.ValueOn == true || mwe["MOTION_EAST"]?.ValueOn == true;
+
         string? pierSide = null;
         if (dev.Properties.TryGetValue("TELESCOPE_PIER_SIDE", out var ps))
             pierSide = (ps["PIER_EAST"]?.ValueOn == true) ? "East" : (ps["PIER_WEST"]?.ValueOn == true ? "West" : null);
@@ -149,6 +158,7 @@ public partial class IndiDiscoveryService
             parked,
             atHome,
             slewing,
+            moving,
             pierSide,
             siteLatitude = siteLat,
             siteLongitude = siteLong,
