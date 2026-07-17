@@ -53,9 +53,13 @@ public class PolarAlignmentController : ControllerBase
         _stream = stream;
     }
 
+    public record PolarAlignStartRequest(double? ExposureSeconds);
+    private static double? _paExposureOverride;
+
     [HttpPost("start")]
-    public async Task<IActionResult> Start()
+    public async Task<IActionResult> Start([FromBody] PolarAlignStartRequest? request)
     {
+        _paExposureOverride = request?.ExposureSeconds is > 0 ? request.ExposureSeconds : null;
         // Polar alignment math is meaningless without the real site latitude —
         // refuse to start rather than silently compute against a wrong location.
         if (ResolveSiteCoordinates() == null)
@@ -156,7 +160,7 @@ public class PolarAlignmentController : ControllerBase
                 // this headless architecture (LatestImageData is only written
                 // by the INDI capture pipeline), so PA could not actually
                 // complete a single point before this change.
-                var tempImage = await CaptureToTempAsync(4.0, token);
+                var tempImage = await CaptureToTempAsync(_paExposureOverride ?? 4.0, token);
 
                 // 2. Solve — hint with where we actually SLEWED to, not the
                 // previous measurement (that hint was a fixed 15° off and

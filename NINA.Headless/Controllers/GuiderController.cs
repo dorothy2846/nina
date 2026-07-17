@@ -229,6 +229,19 @@ public class GuiderController : ControllerBase
     private async Task<IActionResult> WrapPhd2(Func<CancellationToken, Task<bool>> op)
         => Ok(new { success = await op(HttpContext.RequestAborted) });
 
+    public record AlgoParamRequest(string Axis, string Name, double Value);
+
+    /// <summary>Set a single PHD2 guide-algorithm parameter (aggressiveness, minMove, ...)
+    /// on one axis. Backs the manual tuning sliders in the iOS guiding screen; the full
+    /// autotune package remains at /guider/autotune.</summary>
+    [HttpPost("algo")]
+    public Task<IActionResult> SetAlgoParam([FromBody] AlgoParamRequest request) =>
+        WrapPhd2(async ct =>
+        {
+            var axis = string.Equals(request.Axis, "dec", StringComparison.OrdinalIgnoreCase) ? GuideAxis.Dec : GuideAxis.RA;
+            return await _phd2.SetAlgoParamAsync(axis, request.Name, request.Value, ct);
+        });
+
     [HttpPost("pause")]            public Task<IActionResult> Pause() => WrapPhd2(ct => _phd2.SetPausedAsync(true, ct));
     [HttpPost("resume")]           public Task<IActionResult> Resume() => WrapPhd2(ct => _phd2.SetPausedAsync(false, ct));
     [HttpPost("clear-calibration")] public Task<IActionResult> ClearCalibration() => WrapPhd2(_phd2.ClearCalibrationAsync);
