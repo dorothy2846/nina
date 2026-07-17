@@ -262,7 +262,11 @@ public sealed partial class IndiClient
         if (device != null)
         {
             UpdateDriverInterface(device);
-            DevicesChanged?.Invoke();
+            // Guarded: this runs on the BLOB fast path, outside HandleElement's
+            // try/catch — a throwing subscriber used to propagate into the read
+            // loop and tear down the whole connection because an image arrived.
+            try { DevicesChanged?.Invoke(); }
+            catch (Exception ex) { _log.LogWarning(ex, "DevicesChanged handler threw during BLOB finish"); }
         }
     }
 

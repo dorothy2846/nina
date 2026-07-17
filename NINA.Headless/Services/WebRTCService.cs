@@ -180,8 +180,12 @@ public class WebRTCService
         peer.onconnectionstatechange += (state) =>
         {
             _log.LogInformation("WebRTC peer {Id} state={State}", id, state);
-            if (state == RTCPeerConnectionState.failed || state == RTCPeerConnectionState.closed)
+            if (state is RTCPeerConnectionState.failed or RTCPeerConnectionState.closed
+                      or RTCPeerConnectionState.disconnected)
             {
+                // 'disconnected' peers previously lingered in _peers forever,
+                // receiving SendH264Frame every 33ms and keeping the stream +
+                // CPU-watchdog exemption alive with zero real viewers.
                 _peers.TryRemove(id, out _);
                 try { peer.Close("connection ended"); } catch { }
             }
