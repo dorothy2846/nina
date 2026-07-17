@@ -45,7 +45,6 @@ builder.Services.AddSingleton<IWeatherDataMediator>(sp => sp.GetRequiredService<
 builder.Services.AddSingleton<SwitchMediator>();
 builder.Services.AddSingleton<ISwitchMediator>(sp => sp.GetRequiredService<SwitchMediator>());
 builder.Services.AddSingleton<NinaStateService>();
-builder.Services.AddSingleton<OneShotAiService>();
 builder.Services.AddSingleton<SequencerService>();
 builder.Services.AddSingleton<EquipmentSelectionService>();
 builder.Services.AddSingleton<CameraSelectionService>();

@@ -22,27 +22,20 @@ public class FocuserController : ControllerBase
     private static string? _afLastError;
     private static int? _afStepSizeOverride;
     private static double? _afExposureOverride;
-    // One-shot calibration = the rig's real hyperbola from the last successful
-    // V-curve fit (a = best HFR, b = curve width in steps). No magic constants.
-    private static double? _aiCalibA, _aiCalibB;
-    private static DateTime? _aiCalibAt;
     private static object? _afSnapshot;
 
     private readonly IFocuserMediator _focuser;
     private readonly NinaStateService _state;
     private readonly RemoteEventBus _eventBus;
-    private readonly OneShotAiService _aiService;
     private readonly EquipmentSelectionService _equipment;
     private readonly IndiDiscoveryService _indi;
     private readonly AlpacaClient _alpaca;
 
-    public FocuserController(IFocuserMediator focuser, NinaStateService state, RemoteEventBus eventBus,
-        OneShotAiService aiService, EquipmentSelectionService equipment, IndiDiscoveryService indi, AlpacaClient alpaca)
+    public FocuserController(IFocuserMediator focuser, NinaStateService state, RemoteEventBus eventBus, EquipmentSelectionService equipment, IndiDiscoveryService indi, AlpacaClient alpaca)
     {
         _focuser = focuser;
         _state = state;
         _eventBus = eventBus;
-        _aiService = aiService;
         _equipment = equipment;
         _indi = indi;
         _alpaca = alpaca;
@@ -262,7 +255,6 @@ public class FocuserController : ControllerBase
             await MoveFocuserAndSettleAsync(focuserName, targetFocus + backlash, token);
             await MoveFocuserAndSettleAsync(focuserName, targetFocus, token);
 
-            lock (AutoFocusLock) { _aiCalibA = finalFit.A; _aiCalibB = finalFit.B; _aiCalibAt = DateTime.UtcNow; }
             Console.WriteLine($"[Autofocus] converged: best={targetFocus} minHFR={finalFit.MinimumHfd:F2} from {points.Count} points");
             await BroadcastAfStatusAsync(false, true, finalFit, points);
         }
@@ -355,144 +347,5 @@ public class FocuserController : ControllerBase
         return Ok(new { success = true });
     }
 
-    /// <summary>One-shot calibration is a full V-curve run — it measures the rig's
-    /// real hyperbola (a, b), which is stored automatically on fit success and is what
-    /// every subsequent one-shot uses. Monitor progress via autofocus status/events.</summary>
-    [HttpPost("ai-autofocus/calibrate")]
-    public IActionResult CalibrateAiOneShot()
-    {
-        var result = StartAutoFocus(null);
-        return Ok(new { success = true, message = "Calibration V-curve run started — monitor /focuser/autofocus/status" });
-    }
 
-    [HttpPost("ai-autofocus/start")]
-    public IActionResult StartAiOneShot()
-    {
-        lock (AutoFocusLock)
-        {
-            _autoFocusCts?.Cancel();
-            _autoFocusCts = new CancellationTokenSource();
-
-            var token = _autoFocusCts.Token;
-            _ = Task.Run(() => PerformAiOneShotAsync(token), token);
-        }
-        return Ok(new { success = true, message = "AI Autofocus started" });
-    }
-
-    /// <summary>Real one-shot focus: two measured HFRs on the calibrated hyperbola
-    /// pin down best focus without a full V-curve. A final confirmation exposure is
-    /// mandatory — success is only reported when the measured HFR actually proves
-    /// focus; anything else restores the initial position and reports the reason.</summary>
-    private async Task PerformAiOneShotAsync(CancellationToken token)
-    {
-        int? initialPosition = null;
-        string? focuserName = null;
-        try
-        {
-            double a, b;
-            lock (AutoFocusLock)
-            {
-                if (_aiCalibA is not double ca || _aiCalibB is not double cb)
-                    throw new Exception("Not calibrated — run a V-curve autofocus (or ai-autofocus/calibrate) first; its fit is the calibration");
-                a = ca; b = cb;
-            }
-
-            var profile = ProfileSyncController.ActiveCloudProfile;
-            int stepSize = profile?.FocuserStepSize ?? 50;
-            int backlash = profile?.Backlash ?? 100;
-            double exposureSeconds = 3.0;
-
-            var focuserSel = _equipment.GetSelected(DeviceKind.Focuser);
-            if (focuserSel?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Focuser))
-                throw new Exception("Focuser not connected");
-            focuserName = focuserSel.UniqueId;
-
-            var cameraSel = _equipment.GetSelected(DeviceKind.Camera);
-            if (cameraSel?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Camera))
-                throw new Exception("Camera not connected");
-
-            initialPosition = _indi.GetFocuserPosition(focuserName)
-                ?? throw new Exception("Focuser reports no position");
-            int x0 = initialPosition.Value;
-
-            _eventBus.Broadcast("AiAutofocusLiveUpdate", new { running = true, completed = false });
-
-            async Task<double> MeasureAsync(int position)
-            {
-                var hfr = await CaptureAndMeasureHfrAsync(cameraSel.UniqueId, exposureSeconds, token)
-                       ?? await CaptureAndMeasureHfrAsync(cameraSel.UniqueId, exposureSeconds, token);
-                if (hfr == null) throw new Exception($"No stars detected at position {position} — cannot measure focus");
-                return hfr.Value;
-            }
-
-            // HFR predicted by the calibrated hyperbola at distance (p - x):
-            // cosh(asinh(t)) == sqrt(1 + t^2).
-            double Predict(double p, double x) { var t = (p - x) / b; return a * Math.Sqrt(1 + t * t); }
-
-            double y0 = await MeasureAsync(x0);
-
-            if (y0 <= a * 1.08)
-            {
-                _eventBus.Broadcast("AiAutofocusLiveUpdate", new
-                {
-                    running = false, completed = true, stepsMoved = 0, finalPosition = x0,
-                    initialHfr = y0, finalHfr = y0, message = "Already at best focus"
-                });
-                return;
-            }
-
-            // Probe: one short move inward disambiguates which side of focus we are on.
-            int probe = Math.Max(2 * stepSize, 20);
-            int x1 = x0 - probe;
-            await MoveFocuserAndSettleAsync(focuserName, x1, token);
-            double y1 = await MeasureAsync(x1);
-
-            // Distance from focus implied by y0: |p - x0| = b * sqrt((y0/a)^2 - 1).
-            double s0 = b * Math.Sqrt(Math.Max(0, (y0 / a) * (y0 / a) - 1));
-            double cand1 = x0 - s0, cand2 = x0 + s0;
-            double err1 = Math.Abs(Predict(cand1, x1) - y1);
-            double err2 = Math.Abs(Predict(cand2, x1) - y1);
-            double target = err1 <= err2 ? cand1 : cand2;
-            double residual = Math.Min(err1, err2);
-
-            // Both hypotheses disagreeing with the probe measurement means the
-            // measurements do not sit on the calibrated curve (clouds, wind,
-            // stale calibration) — refuse rather than move somewhere random.
-            if (residual > Math.Max(0.35 * y1, 0.6))
-                throw new Exception($"Measurements inconsistent with calibration (residual {residual:F2}px at probe) — conditions changed or calibration stale; run a V-curve");
-
-            int targetPos = (int)Math.Round(target);
-            int maxTravel = stepSize * 20;
-            if (Math.Abs(targetPos - x0) > maxTravel)
-                throw new Exception($"Computed correction {targetPos - x0} steps exceeds sanity limit ({maxTravel}) — run a V-curve instead");
-
-            // Approach from the same (outward) side as the V-curve for backlash consistency.
-            await MoveFocuserAndSettleAsync(focuserName, targetPos + backlash, token);
-            await MoveFocuserAndSettleAsync(focuserName, targetPos, token);
-
-            // Mandatory confirmation exposure — the only thing that can declare success.
-            double yf = await MeasureAsync(targetPos);
-            if (yf > a * 1.30)
-                throw new Exception($"Confirmation frame HFR {yf:F2}px did not reach focus (calibrated best {a:F2}px) — restored initial position");
-
-            Console.WriteLine($"[AiAutofocus] one-shot: {x0} -> {targetPos} HFR {y0:F2} -> {yf:F2} (calib a={a:F2} b={b:F1})");
-            _eventBus.Broadcast("AiAutofocusLiveUpdate", new
-            {
-                running = false, completed = true,
-                stepsMoved = targetPos - x0, finalPosition = targetPos,
-                initialHfr = y0, finalHfr = yf
-            });
-        }
-        catch (Exception ex)
-        {
-            if (initialPosition.HasValue && focuserName != null)
-            {
-                try { await MoveFocuserAndSettleAsync(focuserName, initialPosition.Value, CancellationToken.None); }
-                catch { /* best effort */ }
-            }
-            Console.WriteLine($"[AiAutofocus] failed: {ex.Message}");
-            _eventBus.Broadcast("AiAutofocusLiveUpdate", new { running = false, completed = false, error = ex.Message });
-            _eventBus.Broadcast("AutofocusError", ex.Message);
-        }
-    }
 }
