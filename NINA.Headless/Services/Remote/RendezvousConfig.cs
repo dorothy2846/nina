@@ -2,7 +2,10 @@ using System.Text.Json;
 
 namespace NINA.Headless.Services.Remote;
 
-public record RendezvousConfig(string RendezvousUrl, string MachineId, bool Enabled);
+/// <summary>RelayKey: random secret registered with the relay on first connect
+/// (trust-on-first-use); the relay rejects any later observatory connect for
+/// this MachineId that doesn't present the same key.</summary>
+public record RendezvousConfig(string RendezvousUrl, string MachineId, bool Enabled, string? RelayKey = null);
 
 /// <summary>Persists the observatory's rendezvous URL + connection preferences.
 /// The <see cref="MachineId"/> is derived from <see cref="ObservatoryIdentity"/>'s
@@ -45,6 +48,11 @@ public class RendezvousConfigStore
                         cfg = cfg with { MachineId = machineId };
                         Save(cfg);
                     }
+                    if (string.IsNullOrEmpty(cfg.RelayKey))
+                    {
+                        cfg = cfg with { RelayKey = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)) };
+                        Save(cfg);
+                    }
                     _cached = cfg;
                     return cfg;
                 }
@@ -52,7 +60,8 @@ public class RendezvousConfigStore
         }
         catch (Exception ex) { _log.LogWarning(ex, "Failed to read rendezvous config; generating defaults"); }
 
-        var fresh = new RendezvousConfig("wss://astellar-rdv.koreasouth.cloudapp.azure.com", machineId, Enabled: true);
+        var fresh = new RendezvousConfig("wss://astellar-rdv.koreasouth.cloudapp.azure.com", machineId, Enabled: true,
+            RelayKey: Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)));
         Save(fresh);
         _cached = fresh;
         return fresh;

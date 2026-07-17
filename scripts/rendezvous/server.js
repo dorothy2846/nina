@@ -6,8 +6,20 @@
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const url = require('url');
+const fs = require('fs');
+const crypto = require('crypto');
 
 const PORT = 8080;
+// Trust-on-first-use observatory keys: the first observatory to connect with a
+// machineId registers its key (sha256 stored); later observatory connects must
+// present the same key. Kills the knock-the-real-observatory-off DoS that a
+// bare machineId allowed. Controllers are unaffected.
+const KEYS_FILE = '/opt/rdv/keys.json';
+let obsKeys = {};
+try { obsKeys = JSON.parse(fs.readFileSync(KEYS_FILE, 'utf8')); } catch {}
+function saveKeys() { try { fs.writeFileSync(KEYS_FILE, JSON.stringify(obsKeys)); } catch (e) { log('keys save failed', e.message); } }
+const sha = (v) => crypto.createHash('sha256').update(v).digest('hex');
+
 const observatories = new Map();   // machineId -> ws
 const controllers = new Map();     // machineId -> ws (single active controller)
 
@@ -38,6 +50,16 @@ wss.on('connection', (ws, req) => {
   const role = q.role, machineId = q.machineId;
   if (!machineId || !['observatory', 'controller'].includes(role)) { ws.close(4000, 'bad params'); return; }
   if (machineId.length > 64 || !/^[A-Za-z0-9._-]+$/.test(machineId)) { ws.close(4000, 'bad machineId'); return; }
+  if (role === 'observatory') {
+    const key = typeof q.key === 'string' ? q.key : '';
+    const stored = obsKeys[machineId];
+    if (stored) {
+      if (!key || sha(key) !== stored) { log(`observatory key mismatch machineId=${machineId}`); ws.close(4003, 'bad key'); return; }
+    } else if (key) {
+      obsKeys[machineId] = sha(key); saveKeys();
+      log(`observatory key registered (TOFU) machineId=${machineId}`);
+    }
+  }
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   log(`connect role=${role} machineId=${machineId}`);

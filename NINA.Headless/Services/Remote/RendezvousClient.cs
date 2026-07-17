@@ -115,6 +115,7 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
     private async Task ConnectAndPumpAsync(RendezvousConfig cfg, CancellationToken ct)
     {
         var url = $"{cfg.RendezvousUrl}/ws?role=observatory&machineId={Uri.EscapeDataString(cfg.MachineId)}";
+        if (!string.IsNullOrEmpty(cfg.RelayKey)) url += $"&key={Uri.EscapeDataString(cfg.RelayKey)}";
         _ws = new ClientWebSocket();
         _ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
         await _ws.ConnectAsync(new Uri(url), ct);
