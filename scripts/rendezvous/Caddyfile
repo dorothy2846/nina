@@ -1,0 +1,3 @@
+astellar-rdv.koreasouth.cloudapp.azure.com {
+    reverse_proxy localhost:8080
+}

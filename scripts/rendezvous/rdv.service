@@ -1,0 +1,10 @@
+[Unit]
+Description=Astellar rendezvous relay
+After=network.target
+[Service]
+ExecStart=/usr/bin/node /opt/rdv/server.js
+Restart=always
+RestartSec=5
+User=azureuser
+[Install]
+WantedBy=multi-user.target
