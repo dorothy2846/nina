@@ -31,9 +31,8 @@ public partial class IndiDiscoveryService
         // absent from our cache for ~30s) made /status flicker between the full body and a
         // minimal "Not connected" body, which whiplashed the 3D model between two orientations
         // on every poll.
-        var hasConnectionProp = dev.Properties.ContainsKey("CONNECTION");
-        var connected = hasConnectionProp ? dev.IsConnected : IntentConnected(deviceName);
-        if (!connected && hasConnectionProp) return new { connected = false, name = deviceName };
+        var connected = EffectiveConnected(deviceName, dev);
+        if (!connected) return new { connected = false, name = deviceName };
 
         double? ra = null, dec = null, alt = null, az = null;
         if (dev.Properties.TryGetValue("EQUATORIAL_EOD_COORD", out var eq))
@@ -395,8 +394,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var hasConn = dev.Properties.ContainsKey("CONNECTION");
-        var connected = hasConn ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new TelescopeInfo
         {
             Connected = connected,
@@ -440,7 +438,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new FilterWheelInfo { Connected = connected, Name = deviceName };
         if (!connected) return info;
         if (dev.Properties.TryGetValue("FILTER_SLOT", out var slot))
@@ -454,7 +452,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new RotatorInfo { Connected = connected, Name = deviceName };
         if (!connected) return info;
         if (dev.Properties.TryGetValue("ABS_ROTATOR_ANGLE", out var ang))
@@ -470,7 +468,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new DomeInfo { Connected = connected, Name = deviceName };
         if (!connected) return info;
         if (dev.Properties.TryGetValue("ABS_DOME_POSITION", out var pos))
@@ -485,7 +483,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new FlatDeviceInfo { Connected = connected, Name = deviceName };
         if (!connected) return info;
         if (dev.Properties.TryGetValue("FLAT_LIGHT_INTENSITY", out var br))
@@ -503,7 +501,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new WeatherDataInfo { Connected = connected, Name = deviceName };
         if (!connected) return info;
         if (dev.Properties.TryGetValue("WEATHER_PARAMETERS", out var w))
@@ -524,7 +522,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new SafetyMonitorInfo { Connected = connected, Name = deviceName };
         if (!connected) return info;
         if (dev.Properties.TryGetValue("SAFETY", out var s))
@@ -538,7 +536,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var connected = dev.Properties.ContainsKey("CONNECTION") ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         // Switch's WritableSwitches/ReadonlySwitches require concrete ISwitch
         // implementations — we leave them empty for now since broadcasting
         // just connection state already gates the consumer's "device present"
@@ -550,8 +548,7 @@ public partial class IndiDiscoveryService
     {
         var dev = _client?.GetDevice(deviceName);
         if (dev == null) return null;
-        var hasConn = dev.Properties.ContainsKey("CONNECTION");
-        var connected = hasConn ? dev.IsConnected : IntentConnected(deviceName);
+        var connected = EffectiveConnected(deviceName, dev);
         var info = new FocuserInfo
         {
             Connected = connected,

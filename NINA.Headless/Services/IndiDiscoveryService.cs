@@ -54,6 +54,41 @@ public partial class IndiDiscoveryService : BackgroundService
         }
     }
 
+    // Bounded intent fallback. When a driver bounces the whole device (AM5 emits a
+    // whole-device delProperty on disconnect and takes ~30s to re-def CONNECTION), the
+    // property vanishes from our cache; reporting "disconnected" during that window
+    // whiplashed the UI on every poll. But an UNBOUNDED fallback is a lie — a stopped or
+    // crashed driver would read "connected" forever. Trust the user's intent only for
+    // this long after CONNECTION disappeared, then report the truth.
+    private static readonly TimeSpan IntentFallbackGrace = TimeSpan.FromSeconds(90);
+    private readonly Dictionary<string, DateTime> _connectionLostAt = new();
+
+    /// <summary>Single source of truth for "is this device connected?" in status
+    /// responses: the driver's CONNECTION switch when published, else the user's last
+    /// intent — but only within <see cref="IntentFallbackGrace"/> of the property
+    /// vanishing, so a dead driver eventually reports disconnected instead of
+    /// masking the failure.</summary>
+    internal bool EffectiveConnected(string deviceName, IndiDevice? dev = null)
+    {
+        dev ??= _client?.GetDevice(deviceName);
+        if (dev != null && dev.Properties.ContainsKey("CONNECTION"))
+        {
+            lock (_intentLock) { _connectionLostAt.Remove(deviceName); }
+            return dev.IsConnected;
+        }
+        lock (_intentLock)
+        {
+            if (!_intent.TryGetValue(deviceName, out var intent) || intent != ConnectionIntent.Connected)
+                return false;
+            if (!_connectionLostAt.TryGetValue(deviceName, out var lostAt))
+            {
+                _connectionLostAt[deviceName] = DateTime.UtcNow;
+                return true;
+            }
+            return DateTime.UtcNow - lostAt < IntentFallbackGrace;
+        }
+    }
+
     public IndiDiscoveryService(
         IndiServerManager server,
         EquipmentSelectionService equipment,
@@ -67,17 +102,7 @@ public partial class IndiDiscoveryService : BackgroundService
         // switch. Fallback: if the driver just bounced the whole device (AM5 emits a delProperty
         // on disconnect and takes 30+s to re-def CONNECTION), trust the user's last intent so
         // the app doesn't flicker to "disconnected" during an in-flight reconnect.
-        _equipment.ConnectivityProvider = (_, uniqueId) =>
-        {
-            var dev = _client?.GetDevice(uniqueId);
-            if (dev != null && dev.Properties.ContainsKey("CONNECTION"))
-                return dev.IsConnected;
-
-            lock (_intentLock)
-            {
-                return _intent.TryGetValue(uniqueId, out var intent) && intent == ConnectionIntent.Connected;
-            }
-        };
+        _equipment.ConnectivityProvider = (_, uniqueId) => EffectiveConnected(uniqueId);
     }
 
     // ----- Connection intent + coalescing worker -----

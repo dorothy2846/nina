@@ -106,6 +106,30 @@ public partial class IndiDiscoveryService
 
         DetectConnectionEdges(devs);
         CheckPreviewCapRestore();
+        ReArmIntentWorkers(devs);
+    }
+
+    /// <summary>Self-heal after a driver restart. A FIFO driver stop/start doesn't drop
+    /// our indiserver socket, so RestoreIntentWorkers (which only runs on client
+    /// reconnect) never fires — the device comes back with CONNECTION=Off and nothing
+    /// re-drives it, leaving the user stuck until a full server restart. Whenever a
+    /// device the user intends connected re-defs CONNECTION as disconnected (and no
+    /// connect is already in flight), spawn a worker to converge it back.</summary>
+    private void ReArmIntentWorkers(IReadOnlyList<IndiDevice> devs)
+    {
+        foreach (var dev in devs)
+        {
+            if (dev.IsConnected) continue;
+            if (!dev.Properties.TryGetValue("CONNECTION", out var conn)) continue;
+            if (conn.State == IndiPropertyState.Busy) continue; // connect/disconnect in flight
+            lock (_intentLock)
+            {
+                if (!_intent.TryGetValue(dev.Name, out var intent) || intent != ConnectionIntent.Connected) continue;
+                if (_intentWorker.TryGetValue(dev.Name, out var existing) && !existing.IsCompleted) continue;
+                _log.LogInformation("INDI: {Device} reports disconnected but intent is connected — re-arming connect", dev.Name);
+                _intentWorker[dev.Name] = Task.Run(() => IntentWorkerLoop(dev.Name));
+            }
+        }
     }
 
     /// <summary>Fires when an INDI device transitions Disconnected → Connected (rising
