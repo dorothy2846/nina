@@ -11,16 +11,37 @@ public partial class Phd2Service
     public async Task<bool> SetAllConnectedAsync(bool connected, CancellationToken ct)
     {
         if (!await EnsureStartedAsync(ct)) return false;
-        await SendRpcAsync("set_connected", new object[] { connected }, ct);
-        return true;
+        try
+        {
+            await SendRpcAndAwaitAsync("set_connected", new object[] { connected }, ct, TimeSpan.FromSeconds(30));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("PHD2 set_connected({Connected}) failed: {Message}", connected, ex.Message);
+            return false;
+        }
     }
 
     public async Task<bool> StartGuidingAsync(CancellationToken ct)
     {
         if (!IsConnectedToServer) return false;
-        var param = new { settle = new { pixels = 2.0, time = 5, timeout = 40 }, recalibrate = false };
-        await SendRpcAsync("guide", new[] { (object)param }, ct);
-        return true;
+        // PHD2's guide RPC takes POSITIONAL params [settle, recalibrate]. The
+        // old code wrapped both in one object, which PHD2 parsed AS the
+        // settle param → "invalid settle params" — and the fire-and-forget
+        // send discarded that error, so the API reported success while PHD2
+        // never started guiding.
+        try
+        {
+            await SendRpcAndAwaitAsync("guide",
+                new object[] { new { pixels = 2.0, time = 5, timeout = 40 }, false }, ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("PHD2 guide failed: {Message}", ex.Message);
+            return false;
+        }
     }
 
     /// <summary>Trigger PHD2 to re-calibrate + guide. PHD2 clears its existing calibration
@@ -29,10 +50,18 @@ public partial class Phd2Service
     public async Task<bool> StartCalibrationAsync(CancellationToken ct)
     {
         if (!IsConnectedToServer) return false;
-        await SendRpcAsync("clear_calibration", new object[] { "both" }, ct);
-        var param = new { settle = new { pixels = 2.0, time = 5, timeout = 60 }, recalibrate = true };
-        await SendRpcAsync("guide", new[] { (object)param }, ct);
-        return true;
+        try
+        {
+            await SendRpcAndAwaitAsync("clear_calibration", new object[] { "both" }, ct);
+            await SendRpcAndAwaitAsync("guide",
+                new object[] { new { pixels = 2.0, time = 5, timeout = 60 }, true }, ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("PHD2 calibrate failed: {Message}", ex.Message);
+            return false;
+        }
     }
 
     /// <summary>Poll PHD2's reported AppState until it matches any of the expected values
@@ -65,8 +94,16 @@ public partial class Phd2Service
         {
             pixels, false, new { pixels = 2.0, time = 5, timeout = 40 }
         };
-        await SendRpcAsync("dither", param, ct);
-        return true;
+        try
+        {
+            await SendRpcAndAwaitAsync("dither", param, ct, TimeSpan.FromSeconds(60));
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("PHD2 dither failed: {Message}", ex.Message);
+            return false;
+        }
     }
 
     // MARK: High-level RPC wrappers

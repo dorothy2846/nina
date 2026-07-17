@@ -155,6 +155,24 @@ public partial class Phd2Service
                 return;
             }
 
+            // PHD2 error responses ({"error":{...},"id":N}) previously never
+            // resolved the pending waiter — callers hit the 10s timeout and the
+            // actual reason ("invalid settle params" etc.) evaporated.
+            if (root.TryGetProperty("error", out var rpcError))
+            {
+                if (root.TryGetProperty("id", out var errIdEl) && errIdEl.TryGetInt32(out var errId)
+                    && _pendingRpc.TryRemove(errId, out var errTcs))
+                {
+                    var msg = rpcError.TryGetProperty("message", out var m) ? m.GetString() : rpcError.GetRawText();
+                    errTcs.TrySetException(new InvalidOperationException($"PHD2: {msg}"));
+                }
+                else
+                {
+                    _log.LogWarning("PHD2 RPC error (no waiter): {Error}", rpcError.GetRawText());
+                }
+                return;
+            }
+
             if (root.TryGetProperty("result", out var result))
             {
                 // Fire any pending RPC waiter for this id so SendRpcAndAwaitAsync callers
