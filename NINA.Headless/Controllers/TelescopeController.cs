@@ -306,10 +306,11 @@ public class TelescopeController : ControllerBase
     [HttpPost("move")]
     public async Task<IActionResult> Move([FromBody] MoveRequest request)
     {
-        var validDirections = new[] { "N", "S", "E", "W" };
+        // Compound codes drive both axes at once (ASIAIR-style diagonal pad).
+        var validDirections = new[] { "N", "S", "E", "W", "NE", "NW", "SE", "SW" };
         var dir = request.Direction.ToUpperInvariant();
         if (!validDirections.Contains(dir))
-            return BadRequest(new { success = false, message = "Direction must be N, S, E, or W" });
+            return BadRequest(new { success = false, message = "Direction must be one of N, S, E, W, NE, NW, SE, SW" });
 
         var selected = _equipment.GetSelected(DeviceKind.Telescope);
         if (!_equipment.IsConnected(DeviceKind.Telescope) || selected?.Provider != EquipmentProvider.Indi)
@@ -317,7 +318,12 @@ public class TelescopeController : ControllerBase
         if (_indi.IsTelescopeParked(selected.UniqueId))
             return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
 
-        var dirName = dir switch { "N" => "north", "S" => "south", "E" => "east", "W" => "west", _ => "north" };
+        var dirName = dir switch
+        {
+            "N" => "north", "S" => "south", "E" => "east", "W" => "west",
+            "NE" => "northeast", "NW" => "northwest", "SE" => "southeast", "SW" => "southwest",
+            _ => "north"
+        };
 
         // Interpret `rate` as a sidereal multiplier (1x = sidereal tracking speed). Values ≤ 1
         // or absent fall back to the driver's current selection (usually max). The driver's

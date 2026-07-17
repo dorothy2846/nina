@@ -509,16 +509,23 @@ public partial class IndiDiscoveryService
         // Direction passes straight through. The previous pier-side XOR was removed
         // because PIER_SIDE flips during a pole crossing without us re-evaluating,
         // which produced the "N goes one way, next N goes the other" bouncing.
+        // Compound directions ("northeast" …) engage both axes in one call —
+        // required for diagonals because this method stops all motion on
+        // entry, so two sequential single-axis calls would cancel each other.
         var dir = direction.ToLowerInvariant();
-        if (dir == "north" || dir == "south")
+        var wantNorth = dir.Contains("north");
+        var wantSouth = dir.Contains("south");
+        var wantWest = dir.Contains("west");
+        var wantEast = dir.Contains("east");
+        if (wantNorth || wantSouth)
         {
             await client.SetSwitchManyAsync(deviceName, "TELESCOPE_MOTION_NS",
-                new[] { ("MOTION_NORTH", dir == "north"), ("MOTION_SOUTH", dir == "south") }, ct);
+                new[] { ("MOTION_NORTH", wantNorth), ("MOTION_SOUTH", wantSouth) }, ct);
         }
-        else if (dir == "east" || dir == "west")
+        if (wantWest || wantEast)
         {
             await client.SetSwitchManyAsync(deviceName, "TELESCOPE_MOTION_WE",
-                new[] { ("MOTION_WEST", dir == "west"), ("MOTION_EAST", dir == "east") }, ct);
+                new[] { ("MOTION_WEST", wantWest), ("MOTION_EAST", wantEast) }, ct);
         }
     }
 
