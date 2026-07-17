@@ -283,6 +283,11 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
                     _videoTrack = null;
                 }
                 DetachVideoHandlers();
+                // Auth is per-peer-session: without this, the flag set by a
+                // legitimate hello outlives its peer, and the NEXT controller
+                // socket on this machineId gets its unauthenticated offer
+                // accepted. Every new session must re-hello.
+                _authenticatedDevice = null;
             }
         };
 
@@ -543,6 +548,20 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
                 try { channel.send(out_); }
                 catch (Exception ex) { _log.LogDebug(ex, "dc send rpc response failed"); }
             }
+            else if (respBytes.Length > 240_000)
+            {
+                // SCTP DataChannel messages cap around 256KB; a silent send
+                // failure would leave the phone waiting out its timeout.
+                try
+                {
+                    channel.send(JsonSerializer.Serialize(new
+                    {
+                        type = "rpc", id, status = 413,
+                        body = $"Response too large for the remote tunnel ({respBytes.Length} bytes) — use the LAN connection for full-resolution downloads"
+                    }));
+                }
+                catch (Exception ex) { _log.LogDebug(ex, "dc send 413 failed"); }
+            }
             else
             {
                 // Binary frame layout: [uint16 LE header length][JSON header bytes][body bytes].
@@ -589,11 +608,23 @@ public class RendezvousClient : BackgroundService, IRemoteEventSink
         }
     }
 
+    private readonly SemaphoreSlim _sendLock = new(1, 1);
+
     private async Task SendServerAsync(object obj)
     {
-        if (_ws == null || _ws.State != WebSocketState.Open) return;
+        // ClientWebSocket forbids overlapping SendAsync calls; ICE candidates
+        // fire from event threads concurrently with answer/hello-ack sends.
+        var ws = _ws;
+        if (ws == null || ws.State != WebSocketState.Open) return;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(obj);
-        await _ws.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+        await _sendLock.WaitAsync();
+        try
+        {
+            if (ws.State == WebSocketState.Open)
+                await ws.SendAsync(bytes, WebSocketMessageType.Text, true, CancellationToken.None);
+        }
+        catch (Exception ex) { _log.LogDebug(ex, "rendezvous send failed"); }
+        finally { _sendLock.Release(); }
     }
 
     private async Task CleanupAsync()

@@ -9,7 +9,7 @@ const url = require('url');
 
 const PORT = 8080;
 const observatories = new Map();   // machineId -> ws
-const controllers = new Map();     // machineId -> Set<ws>
+const controllers = new Map();     // machineId -> ws (single active controller)
 
 const ICE_CONFIG = JSON.stringify({
   type: 'ice-config',
@@ -28,7 +28,8 @@ const server = http.createServer((req, res) => {
   if (req.url === '/health') { res.writeHead(200); res.end('ok'); return; }
   res.writeHead(404); res.end();
 });
-const wss = new WebSocketServer({ server, path: '/ws' });
+// 256KB payload cap: signaling envelopes are tiny; anything bigger is abuse.
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 262144 });
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
@@ -36,6 +37,7 @@ wss.on('connection', (ws, req) => {
   const q = url.parse(req.url, true).query;
   const role = q.role, machineId = q.machineId;
   if (!machineId || !['observatory', 'controller'].includes(role)) { ws.close(4000, 'bad params'); return; }
+  if (machineId.length > 64 || !/^[A-Za-z0-9._-]+$/.test(machineId)) { ws.close(4000, 'bad machineId'); return; }
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
   log(`connect role=${role} machineId=${machineId}`);
@@ -47,18 +49,21 @@ wss.on('connection', (ws, req) => {
     observatories.set(machineId, ws);
     ws.on('message', (data, isBinary) => {
       if (isBinary) return;
-      const peers = controllers.get(machineId);
-      if (peers) for (const p of peers) { try { p.send(data.toString()); } catch {} }
+      const peer = controllers.get(machineId);
+      if (peer && peer.readyState === 1) { try { peer.send(data.toString()); } catch {} }
     });
     ws.on('close', () => {
       if (observatories.get(machineId) === ws) observatories.delete(machineId);
-      const peers = controllers.get(machineId);
-      if (peers) for (const p of peers) { try { p.send(JSON.stringify({ type: 'error', error: 'observatory-offline' })); } catch {} }
+      const peer = controllers.get(machineId);
+      if (peer) { try { peer.send(JSON.stringify({ type: 'error', error: 'observatory-offline' })); } catch {} }
       log(`observatory gone machineId=${machineId}`);
     });
   } else {
-    if (!controllers.has(machineId)) controllers.set(machineId, new Set());
-    controllers.get(machineId).add(ws);
+    // Newest controller wins; the old socket is closed so signaling from the
+    // observatory only ever reaches one peer.
+    const oldCtl = controllers.get(machineId);
+    if (oldCtl && oldCtl !== ws) { try { oldCtl.close(4001, 'replaced'); } catch {} }
+    controllers.set(machineId, ws);
     const obs = observatories.get(machineId);
     if (!obs || obs.readyState !== 1) {
       try { ws.send(JSON.stringify({ type: 'error', error: 'observatory-offline' })); } catch {}
@@ -70,7 +75,7 @@ wss.on('connection', (ws, req) => {
       else { try { ws.send(JSON.stringify({ type: 'error', error: 'observatory-offline' })); } catch {} }
     });
     ws.on('close', () => {
-      controllers.get(machineId)?.delete(ws);
+      if (controllers.get(machineId) === ws) controllers.delete(machineId);
       log(`controller gone machineId=${machineId}`);
     });
   }
