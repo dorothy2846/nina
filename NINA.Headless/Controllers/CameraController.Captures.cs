@@ -65,6 +65,33 @@ public partial class CameraController
             catch (Exception ex) { _state.NotifyStateChanged("dither", new { failed = true, message = ex.Message }); }
         }
 
+        // Pre-capture filter positioning. The sequencer sends a filter NAME with
+        // each frame; recording it in metadata without actually moving the wheel
+        // (the old behaviour) silently shot every frame through whatever filter
+        // happened to be loaded while labeling it as the requested one.
+        if (!string.IsNullOrWhiteSpace(request.Filter))
+        {
+            var fwSel = _equipment.GetSelected(DeviceKind.FilterWheel);
+            if (fwSel?.Provider == EquipmentProvider.Indi && _equipment.IsConnected(DeviceKind.FilterWheel))
+            {
+                var filters = _indi.GetFilterWheelFilters(fwSel.UniqueId);
+                var match = filters.FirstOrDefault(f => string.Equals(f.name, request.Filter, StringComparison.OrdinalIgnoreCase));
+                if (match.name == null)
+                    return BadRequest(new { success = false, message = $"Filter '{request.Filter}' not found on wheel ({string.Join(", ", filters.Select(f => f.name))})" });
+                await _indi.FilterWheelChangeAsync(fwSel.UniqueId, match.slot, HttpContext.RequestAborted);
+                // FILTER_SLOT set is fire-and-forget; wait for the wheel to settle
+                // so the exposure doesn't start mid-rotation.
+                for (int i = 0; i < 30; i++)
+                {
+                    var st = _indi.BuildFilterWheelStatus(fwSel.UniqueId);
+                    var moving = st?.GetType().GetProperty("isMoving")?.GetValue(st) as bool?;
+                    var pos = st?.GetType().GetProperty("currentPosition")?.GetValue(st) as int?;
+                    if (moving == false && pos == match.slot) break;
+                    await Task.Delay(500, HttpContext.RequestAborted);
+                }
+            }
+        }
+
         bool resumeStreamAfter = _stream.IsRunning;
         if (resumeStreamAfter)
         {
