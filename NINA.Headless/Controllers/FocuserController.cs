@@ -20,6 +20,8 @@ public class FocuserController : ControllerBase
     private static readonly object AutoFocusLock = new();
     private static CancellationTokenSource? _autoFocusCts;
     private static string? _afLastError;
+    private static int? _afStepSizeOverride;
+    private static double? _afExposureOverride;
     private static object? _afSnapshot;
 
     private readonly IFocuserMediator _focuser;
@@ -160,14 +162,20 @@ public class FocuserController : ControllerBase
         });
     }
 
+    public record AutofocusStartRequest(int? StepSize, double? ExposureSeconds);
+
     [HttpPost("autofocus/start")]
-    public IActionResult StartAutoFocus()
+    public IActionResult StartAutoFocus([FromBody] AutofocusStartRequest? request)
     {
         lock (AutoFocusLock)
         {
             _autoFocusCts?.Cancel();
             _autoFocusCts = new CancellationTokenSource();
             _afLastError = null;
+            _afSnapshot = null; // stale snapshot from a prior run must not leak into the new one
+            // UI-supplied overrides; profile values remain the default.
+            _afStepSizeOverride = request?.StepSize is > 0 ? request.StepSize : null;
+            _afExposureOverride = request?.ExposureSeconds is > 0 ? request.ExposureSeconds : null;
 
             var token = _autoFocusCts.Token;
             _ = Task.Run(() => PerformAutofocusAsync(token), token);
@@ -189,10 +197,10 @@ public class FocuserController : ControllerBase
         try
         {
             var profile = ProfileSyncController.ActiveCloudProfile;
-            int stepSize = profile?.FocuserStepSize ?? 50;
+            int stepSize = _afStepSizeOverride ?? profile?.FocuserStepSize ?? 50;
             int initialOffsets = profile?.InitialOffsetSteps ?? 4;
             int backlash = profile?.Backlash ?? 100;
-            double exposureSeconds = 3.0;
+            double exposureSeconds = _afExposureOverride ?? 3.0;
 
             var focuserSel = _equipment.GetSelected(DeviceKind.Focuser);
             if (focuserSel?.Provider != EquipmentProvider.Indi || !_equipment.IsConnected(DeviceKind.Focuser))

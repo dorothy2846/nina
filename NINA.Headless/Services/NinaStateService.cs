@@ -123,8 +123,8 @@ public class NinaStateService :
             {
                 connected = info.Connected,
                 name = info.Name,
-                temperature = info.Temperature,
-                coolerPower = info.CoolerPower,
+                temperature = Finite(info.Temperature),
+                coolerPower = Finite(info.CoolerPower),
                 gain = info.Gain,
                 offset = info.Offset,
                 binning = info.BinX,
@@ -179,6 +179,12 @@ public class NinaStateService :
 
     public bool IsCaptureInFlight => _exposureStartTimeUtc.HasValue;
 
+    /// <summary>NaN/Infinity are not representable in JSON — SignalR's System.Text.Json
+    /// throws on them, which killed the /ws/nina connection during OnConnectedAsync and
+    /// left the app in a silent reconnect loop showing everything disconnected. Any
+    /// driver-sourced double goes through here: non-finite becomes null.</summary>
+    private static double? Finite(double v) => double.IsFinite(v) ? v : (double?)null;
+
     public object BuildTelescopeStatus()
     {
         var info = TelescopeInfo;
@@ -188,10 +194,10 @@ public class NinaStateService :
             {
                 connected = info.Connected,
                 name = info.Name,
-                ra = info.RightAscension,
-                dec = info.Declination,
-                alt = info.Altitude,
-                az = info.Azimuth,
+                ra = Finite(info.RightAscension),
+                dec = Finite(info.Declination),
+                alt = Finite(info.Altitude),
+                az = Finite(info.Azimuth),
                 tracking = info.TrackingEnabled,
                 parked = info.AtPark,
                 slewing = info.Slewing,
@@ -208,10 +214,10 @@ public class NinaStateService :
             {
                 connected = info.Connected,
                 name = info.Name,
-                pixelScale = info.PixelScale,
-                rmsRA = info.RMSError?.RA?.Arcseconds ?? 0,
-                rmsDec = info.RMSError?.Dec?.Arcseconds ?? 0,
-                rmsTotal = info.RMSError?.Total?.Arcseconds ?? 0
+                pixelScale = Finite(info.PixelScale),
+                rmsRA = Finite(info.RMSError?.RA?.Arcseconds ?? 0),
+                rmsDec = Finite(info.RMSError?.Dec?.Arcseconds ?? 0),
+                rmsTotal = Finite(info.RMSError?.Total?.Arcseconds ?? 0)
             };
     }
 
@@ -232,7 +238,7 @@ public class NinaStateService :
     public object BuildFocuserStatus() => FocuserInfo == null
         ? new { connected = false as bool?, name = "Not connected" }
         : new { connected = FocuserInfo.Connected, name = FocuserInfo.Name,
-                position = FocuserInfo.Position, temperature = FocuserInfo.Temperature,
+                position = FocuserInfo.Position, temperature = Finite(FocuserInfo.Temperature),
                 isMoving = FocuserInfo.IsMoving, stepSize = FocuserInfo.StepSize };
 
     public object BuildFilterWheelStatus() => FilterWheelInfo == null
@@ -249,7 +255,7 @@ public class NinaStateService :
     public object BuildDomeStatus() => DomeInfo == null
         ? new { connected = false as bool?, name = "Not connected" }
         : new { connected = DomeInfo.Connected, name = DomeInfo.Name,
-                azimuth = DomeInfo.Azimuth, slewing = DomeInfo.Slewing };
+                azimuth = Finite(DomeInfo.Azimuth), slewing = DomeInfo.Slewing };
 
     public object BuildFlatDeviceStatus() => FlatDeviceInfo == null
         ? new { connected = false as bool?, name = "Not connected" }
@@ -259,10 +265,10 @@ public class NinaStateService :
     public object BuildWeatherStatus() => WeatherDataInfo == null
         ? new { connected = false as bool?, name = "Not connected" }
         : new { connected = WeatherDataInfo.Connected, name = WeatherDataInfo.Name,
-                temperature = WeatherDataInfo.Temperature, humidity = WeatherDataInfo.Humidity,
-                pressure = WeatherDataInfo.Pressure, dewPoint = WeatherDataInfo.DewPoint,
-                windSpeed = WeatherDataInfo.WindSpeed, cloudCover = WeatherDataInfo.CloudCover,
-                skyTemperature = WeatherDataInfo.SkyTemperature };
+                temperature = Finite(WeatherDataInfo.Temperature), humidity = Finite(WeatherDataInfo.Humidity),
+                pressure = Finite(WeatherDataInfo.Pressure), dewPoint = Finite(WeatherDataInfo.DewPoint),
+                windSpeed = Finite(WeatherDataInfo.WindSpeed), cloudCover = Finite(WeatherDataInfo.CloudCover),
+                skyTemperature = Finite(WeatherDataInfo.SkyTemperature) };
 
     public object BuildSafetyMonitorStatus() => SafetyMonitorInfo == null
         ? new { connected = false as bool?, name = "Not connected" }
