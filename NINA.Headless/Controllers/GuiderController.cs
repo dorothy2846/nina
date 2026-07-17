@@ -239,7 +239,11 @@ public class GuiderController : ControllerBase
         WrapPhd2(async ct =>
         {
             var axis = string.Equals(request.Axis, "dec", StringComparison.OrdinalIgnoreCase) ? GuideAxis.Dec : GuideAxis.RA;
-            return await _phd2.SetAlgoParamAsync(axis, request.Name, request.Value, ct);
+            // PHD2's real parameter name is "aggression" — set_algo_param with an
+            // unknown name reports success without applying anything (verified live),
+            // so normalize the friendlier alias here.
+            var name = string.Equals(request.Name, "aggressiveness", StringComparison.OrdinalIgnoreCase) ? "aggression" : request.Name;
+            return await _phd2.SetAlgoParamAsync(axis, name, request.Value, ct);
         });
 
     [HttpPost("pause")]            public Task<IActionResult> Pause() => WrapPhd2(ct => _phd2.SetPausedAsync(true, ct));
