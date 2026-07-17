@@ -102,15 +102,7 @@ public class PolarAlignmentMath
         double totalErrorArcMin = Math.Sqrt(altErrorArcMin * altErrorArcMin + azErrorArcMin * azErrorArcMin);
 
         // 7. Generate physical knob turning hints
-        string altHint = altErrorArcMin > 0 ? "고도를 낮추세요 (Down)" : "고도를 높이세요 (Up)";
-        string azHint = azErrorArcMin > 0 ? "방위각을 서쪽(왼쪽)으로 (Left / West)" : "방위각을 동쪽(오른쪽)으로 (Right / East)";
-
-        if (latitudeDegrees < 0)
-        {
-            // Reverse hints for Southern Hemisphere
-            altHint = altErrorArcMin > 0 ? "고도를 낮추세요 (Down)" : "고도를 높이세요 (Up)";
-            azHint = azErrorArcMin > 0 ? "방위각을 동쪽(오른쪽)으로 (Right / East)" : "방위각을 서쪽(왼쪽)으로 (Left / West)";
-        }
+        var (altHint, azHint) = KnobHints(altErrorArcMin, azErrorArcMin, latitudeDegrees);
 
         return new PolarAlignmentResult
         {
@@ -122,6 +114,33 @@ public class PolarAlignmentMath
             AltitudeCorrectionHint = altHint,
             AzimuthCorrectionHint = azHint
         };
+    }
+
+    /// <summary>Physical knob hints from signed errors. Single source of
+    /// truth — the base result AND every live update use this, so the
+    /// direction advice can't diverge between phases. Altitude advice is
+    /// hemisphere-independent (an axis pointing too high is lowered with the
+    /// same knob everywhere); the azimuth advice flips south of the equator
+    /// because "toward the pole" reverses left/right when facing south.
+    /// The old code had a dead southern reassignment of the alt hint and NO
+    /// hemisphere handling in the live loop.</summary>
+    public static (string AltHint, string AzHint) KnobHints(double altErrorArcMin, double azErrorArcMin, double latitudeDegrees)
+    {
+        string altHint = altErrorArcMin > 0 ? "고도를 낮추세요 (Down)" : "고도를 높이세요 (Up)";
+        string azHint;
+        if (latitudeDegrees >= 0)
+        {
+            azHint = azErrorArcMin > 0
+                ? "방위각을 서쪽(왼쪽)으로 (Left / West)"
+                : "방위각을 동쪽(오른쪽)으로 (Right / East)";
+        }
+        else
+        {
+            azHint = azErrorArcMin > 0
+                ? "방위각을 동쪽(오른쪽)으로 (Right / East)"
+                : "방위각을 서쪽(왼쪽)으로 (Left / West)";
+        }
+        return (altHint, azHint);
     }
 
     private static Vector3D SphericalToCartesian(double raHours, double decDegrees)

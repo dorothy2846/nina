@@ -24,6 +24,12 @@ public class HeadlessAstapSolver
         _executablePath = executablePath;
     }
 
+    /// <summary>Whether the ASTAP executable actually exists. Callers should
+    /// refuse to start solve-dependent workflows with a clear message instead
+    /// of letting every solve silently "fail" (which reads as bad sky/optics).</summary>
+    public bool IsAvailable => File.Exists(_executablePath);
+    public string ExecutablePath => _executablePath;
+
     public async Task<PlateSolveResult> SolveAsync(
         string imageFilePath, 
         double focalLengthMm, 
