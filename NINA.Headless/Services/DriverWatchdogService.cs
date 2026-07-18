@@ -155,23 +155,24 @@ public class DriverWatchdogService : BackgroundService
                 // never triggered recovery.
                 if (lastAttempt != DateTime.MinValue && now - lastAttempt < TranscoderStallThreshold)
                 {
-                    _transcoderStrikes++;
+                    // Fall through to the SHARED strike/restart/stop escalation
+                    // below — a stdin wedge that survives repeated restarts must
+                    // hit the same give-up-and-stop path as the other wedge
+                    // modes instead of flapping ffmpeg forever.
                     _log.LogWarning(
-                        "DriverWatchdog: frames arriving but none reach ffmpeg (stdin blocked) — encoder wedge, strike {Strikes}",
-                        _transcoderStrikes);
-                    if (_transcoderStrikes >= 2)
-                    {
-                        _transcoderStrikes = 0;
-                        _log.LogWarning("DriverWatchdog: restarting wedged transcoder");
-                        _ = Task.Run(() => _h264.RestartAsync());
-                    }
-                    return;
+                        "DriverWatchdog: frames arriving but none reach ffmpeg (stdin blocked) — encoder wedge (strike {Strike}/{Max})",
+                        _transcoderStrikes + 1, MaxConsecutiveTranscoderRestarts);
                 }
+                else
+                {
                 _log.LogWarning(
                     "DriverWatchdog: stream is active but no frames have reached ffmpeg for {Silence}s — upstream producer stall, not restarting the encoder",
                     lastPush == DateTime.MinValue ? "∞" : ((int)(now - lastPush).TotalSeconds).ToString());
                 return;
+                }
             }
+            else
+            {
 
             var lastFrame = _h264.LastFrameAt;
             var silenceAnchor = lastFrame == DateTime.MinValue ? _h264.StartedAt : lastFrame;
@@ -184,6 +185,7 @@ public class DriverWatchdogService : BackgroundService
             }
             _log.LogWarning("DriverWatchdog: ffmpeg silent for {Silence}s with input flowing (strike {Strike}/{Max})",
                 (int)silence.TotalSeconds, _transcoderStrikes + 1, MaxConsecutiveTranscoderRestarts);
+            }
         }
         else
         {

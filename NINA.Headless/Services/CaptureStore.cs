@@ -121,7 +121,11 @@ public class CaptureStore
         }
 
         var entry = new CaptureEntry(
-            Id: id,
+            // Id == on-disk base name (including _DARK/_FLAT_<filter> suffix).
+            // Using the bare id here meant a server restart re-listed the same
+            // frame under a different Id (LoadExistingIndex keys by filename),
+            // 404ing every pre-restart deep link/delete.
+            Id: baseName,
             Timestamp: now,
             FitsPath: fitsPath,
             FullPngPath: pngPath,

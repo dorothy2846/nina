@@ -409,7 +409,16 @@ public class IndiDriverWatchdog : BackgroundService
         // INDI property `Timestamp` (set on every defXxxxVector / setXxxxVector)
         // is the cleanest "data freshness" signal — update it whenever it
         // moves, mark stale when it doesn't.
-        var current = ep.Timestamp ?? DateTime.UtcNow;
+        // No Timestamp from the driver = no freshness data. The old fallback of
+        // "now" meant staleness could NEVER trip on such drivers (silent false
+        // negative). We can't detect staleness without data, but say so once.
+        if (ep.Timestamp == null)
+        {
+            if (_sensorLastSeen.TryAdd(key, DateTime.MinValue))
+                _log.LogWarning("DriverWatchdog: {Kind} {Device} {Prop} carries no timestamps — staleness detection unavailable", kind, sel.UniqueId, propName);
+            return;
+        }
+        var current = ep.Timestamp.Value;
         if (!_sensorLastSeen.TryGetValue(key, out var prev) || current > prev)
         {
             _sensorLastSeen[key] = current;
@@ -425,18 +434,11 @@ public class IndiDriverWatchdog : BackgroundService
             kind, sel.UniqueId, propName, ageSec);
         DriverHung?.Invoke(kind, sel.UniqueId, $"{propName} stale for {ageSec:F0}s");
         RecordHang(kind, sel.UniqueId);
-        var deviceName = sel.UniqueId;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                await _indi.DisconnectDeviceAsync(deviceName, CancellationToken.None);
-                await Task.Delay(500);
-                await _indi.ConnectDeviceAsync(deviceName, CancellationToken.None);
-                _log.LogInformation("DriverWatchdog: bounced {Kind} {Device} CONNECTION", kind, deviceName);
-            }
-            catch (Exception ex) { _log.LogWarning(ex, "DriverWatchdog: {Kind} bounce failed for {Device}", kind, deviceName); }
-        });
+        // Deliberately NO connection bounce here: drivers that republish only on
+        // CHANGE (a safety monitor steadily reporting "safe") look stale while
+        // perfectly healthy, and bouncing them every window created periodic
+        // holes in exactly the coverage they exist to provide. Surface the
+        // warning + event; the user (or a chronic-failure signal) decides.
     }
 
     /// Push a hang into the sliding window and raise the chronic-failure

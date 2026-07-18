@@ -294,6 +294,7 @@ public class H264Transcoder : IAsyncDisposable
         await StopAsync();
         Volatile.Write(ref _lastFrameTicks, 0);
         Volatile.Write(ref _lastPushTicks, 0);
+        Volatile.Write(ref _lastPushAttemptTicks, 0);
         Volatile.Write(ref _startedAtTicks, 0);
         Interlocked.Increment(ref _restartCount);
         if (fps > 0) Start(fps, crf);

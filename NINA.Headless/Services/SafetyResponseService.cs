@@ -126,6 +126,11 @@ public class SafetyResponseService : BackgroundService, ISafetyMonitorConsumer, 
                     catch (Exception ex) { _log.LogWarning(ex, "SafetyResponse: abort exposure failed"); }
                 });
             }
+            else if (cam != null)
+            {
+                // Don't pretend: the abort reflex only reaches INDI cameras today.
+                _log.LogWarning("SafetyResponse: cannot abort exposure on non-INDI camera ({Provider}) — unsafe-condition abort unsupported for this provider", cam.Provider);
+            }
         }
     }
 }
