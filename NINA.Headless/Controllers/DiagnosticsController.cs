@@ -20,12 +20,77 @@ public class DiagnosticsController : ControllerBase
     private readonly IndiDiscoveryService _indi;
     private readonly EquipmentSelectionService _equipment;
     private readonly CameraStreamService _stream;
+    private readonly RingBufferLog _recentLog;
+    private readonly IndiServerManager _indiServer;
+    private readonly SequenceExecutionService _sequence;
+    private readonly NINA.Headless.Services.Remote.PairedDeviceStore _paired;
 
-    public DiagnosticsController(IndiDiscoveryService indi, EquipmentSelectionService equipment, CameraStreamService stream)
+    public DiagnosticsController(
+        IndiDiscoveryService indi,
+        EquipmentSelectionService equipment,
+        CameraStreamService stream,
+        RingBufferLog recentLog,
+        IndiServerManager indiServer,
+        SequenceExecutionService sequence,
+        NINA.Headless.Services.Remote.PairedDeviceStore paired)
     {
         _indi = indi;
         _equipment = equipment;
         _stream = stream;
+        _recentLog = recentLog;
+        _indiServer = indiServer;
+        _sequence = sequence;
+        _paired = paired;
+    }
+
+    private bool IsAuthorized()
+    {
+        var auth = Request.Headers.Authorization.ToString();
+        var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? auth[7..].Trim() : "";
+        return _paired.Verify(token) != null;
+    }
+
+    /// <summary>One-click support bundle: versions, uptime, recent log lines,
+    /// driver/equipment state, stream + sequence snapshots. Returned as a
+    /// plain-text attachment the app hands to the iOS share sheet — logs can
+    /// carry paths/SSIDs, so this requires the paired-device bearer token.</summary>
+    [HttpGet("bundle")]
+    public IActionResult Bundle()
+    {
+        if (!IsAuthorized()) return Unauthorized();
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("=== Astella diagnostics bundle ===");
+        sb.AppendLine($"generatedAt: {DateTime.UtcNow:O}");
+        sb.AppendLine($"version: {typeof(Program).Assembly.GetName().Version}");
+        sb.AppendLine($"os: {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
+        sb.AppendLine($"uptime: {DateTime.UtcNow - System.Diagnostics.Process.GetCurrentProcess().StartTime.ToUniversalTime():g}");
+        sb.AppendLine();
+
+        sb.AppendLine("=== INDI ===");
+        sb.AppendLine($"connected: {_indi.Client != null}");
+        sb.AppendLine($"runningDrivers: {string.Join(' ', _indiServer.RunningDrivers)}");
+        foreach (var d in _indi.Devices)
+            sb.AppendLine($"device: {d.Name}");
+        sb.AppendLine();
+
+        sb.AppendLine("=== Stream ===");
+        sb.AppendLine($"running: {_stream.IsRunning}");
+        sb.AppendLine();
+
+        var seq = _sequence.GetSnapshot();
+        sb.AppendLine("=== Sequence ===");
+        sb.AppendLine($"running: {seq.Running} plan: {seq.PlanName} target: {seq.CurrentTarget}");
+        sb.AppendLine();
+
+        sb.AppendLine($"=== Recent log (last {RingBufferLog.Capacity} lines max) ===");
+        foreach (var line in _recentLog.Snapshot())
+            sb.AppendLine(line);
+
+        return File(
+            System.Text.Encoding.UTF8.GetBytes(sb.ToString()),
+            "text/plain",
+            $"astella-diagnostics-{DateTime.UtcNow:yyyyMMdd-HHmmss}.txt");
     }
 
     /// <summary>Per-frame stage timings for the streaming pipeline. Returns
