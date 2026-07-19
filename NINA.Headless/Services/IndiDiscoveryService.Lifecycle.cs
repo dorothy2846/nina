@@ -59,10 +59,29 @@ public partial class IndiDiscoveryService
                     catch (Exception ex) { _log.LogWarning(ex, "INDI: ClientReconnected handler threw"); }
                 }
 
+                // Refresh heartbeat: the selection service expires device rows
+                // 60s after their last push (StickyGrace), and DevicesChanged
+                // only fires on INDI traffic. A quiet-but-healthy setup — e.g.
+                // simulators sitting idle — otherwise loses every device from
+                // the list (and Connect starts failing with Unknown deviceId)
+                // one minute after startup. Re-push while the link is alive.
+                using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
+                var heartbeat = Task.Run(async () =>
+                {
+                    while (!heartbeatCts.Token.IsCancellationRequested)
+                    {
+                        try { await Task.Delay(TimeSpan.FromSeconds(20), heartbeatCts.Token); }
+                        catch (OperationCanceledException) { break; }
+                        try { OnDevicesChanged(); }
+                        catch (Exception ex) { _log.LogWarning(ex, "INDI: device refresh heartbeat threw"); }
+                    }
+                });
+
                 // Block until the read loop signals disconnect (fault) OR
                 // shutdown is requested. No polling.
                 using var stopReg = stoppingToken.Register(() => dropped.TrySetResult("cancelled"));
                 var reason = await dropped.Task;
+                heartbeatCts.Cancel();
                 if (stoppingToken.IsCancellationRequested) break;
                 _log.LogWarning("INDI: connection dropped — {Reason}", reason);
                 try { ClientDisconnected?.Invoke(reason); }
