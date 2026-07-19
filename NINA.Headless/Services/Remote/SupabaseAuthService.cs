@@ -35,9 +35,9 @@ public class SupabaseAuthService
         _http = httpFactory.CreateClient("supabase");
         _log = log;
         _projectUrl = Environment.GetEnvironmentVariable("NINA_SUPABASE_URL")
-                       ?? "https://szedjvtewrpwobwioqzw.supabase.co";
+                       ?? "https://astellar-sb.koreasouth.cloudapp.azure.com";
         _anonKey = Environment.GetEnvironmentVariable("NINA_SUPABASE_ANON_KEY")
-                       ?? "sb_publishable_TGmrWHFH71jhOvIkJSxtLg__Q1gZdhQ";
+                       ?? "eyJhbGciOiAiSFMyNTYiLCAidHlwIjogIkpXVCJ9.eyJyb2xlIjogImFub24iLCAiaXNzIjogInN1cGFiYXNlIiwgImlhdCI6IDE3ODQ0MjU0MjMsICJleHAiOiAyMDk5Nzg1NDIzfQ.kFJgTWIZesQFKeWISMlON6cC1kl6jD5Y_G__QY4L_Hk";
         _http.Timeout = TimeSpan.FromSeconds(8);
     }
 
