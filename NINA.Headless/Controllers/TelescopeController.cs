@@ -174,8 +174,13 @@ public class TelescopeController : ControllerBase
         if (_indi.IsTelescopeParked(selected.UniqueId))
             return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
 
-        // API passes RA in degrees; INDI expects hours.
-        await _indi.TelescopeSlewAsync(selected.UniqueId, request.RA / 15.0, request.Dec, HttpContext.RequestAborted);
+        // API passes RA in degrees; INDI expects hours. Coordinates default to
+        // J2000 (SkyMap catalog frame) and are precessed to epoch-of-date here —
+        // INDI's EQUATORIAL_EOD_COORD is JNow, and sending J2000 raw put every
+        // goto ~22' off (accumulated precession since 2000). epoch="jnow" skips
+        // the conversion for already-of-date sources (planets, solve results).
+        var (raHours, dec) = ToMountEpoch(request.RA, request.Dec, request.Epoch);
+        await _indi.TelescopeSlewAsync(selected.UniqueId, raHours, dec, HttpContext.RequestAborted);
         return Ok(new { success = true, message = $"Slewing to RA={request.RA:F4}, Dec={request.Dec:F4}", ra = request.RA, dec = request.Dec });
     }
 
@@ -279,7 +284,16 @@ public class TelescopeController : ControllerBase
         });
     }
 
-    public record SyncRequest(double RA, double Dec);
+    public record SyncRequest(double RA, double Dec, string? Epoch = null);
+
+    /// <summary>J2000 → epoch-of-date at the mount boundary (the API speaks
+    /// J2000; only INDI speaks JNow). Returns (raHours, decDeg).</summary>
+    private static (double RaHours, double DecDeg) ToMountEpoch(double raDeg, double decDeg, string? epoch)
+    {
+        if (string.Equals(epoch, "jnow", StringComparison.OrdinalIgnoreCase))
+            return (raDeg / 15.0, decDeg);
+        return PolarAlignmentController.ToJnow(raDeg / 15.0, decDeg);
+    }
 
     /// <summary>Sync the mount's internal position to the given RA/Dec. Used after a plate-solve
     /// to tell the mount "you are actually here" without moving. Follow-on slews then calibrate
@@ -299,7 +313,8 @@ public class TelescopeController : ControllerBase
         if (_indi.IsTelescopeParked(selected.UniqueId))
             return StatusCode(409, new { success = false, message = "Mount is parked. Unpark first." });
 
-        await _indi.TelescopeSyncAsync(selected.UniqueId, request.RA / 15.0, request.Dec, HttpContext.RequestAborted);
+        var (raHours, dec) = ToMountEpoch(request.RA, request.Dec, request.Epoch);
+        await _indi.TelescopeSyncAsync(selected.UniqueId, raHours, dec, HttpContext.RequestAborted);
         return Ok(new { success = true, message = $"Synced to RA={request.RA:F4}, Dec={request.Dec:F4}" });
     }
 
