@@ -48,6 +48,8 @@ public class SequencerController : ControllerBase
             planName = exec.PlanName,
             lastError = exec.LastError,
             startedAt = exec.StartedAt,
+            waitingUntil = exec.WaitingUntil,
+            waitingReason = exec.WaitingReason,
             estimatedFinish = (string?)null,
             equipment = _state.BuildEquipmentStatus(),
             timestamp = status.Timestamp
