@@ -26,6 +26,7 @@ public class SequenceExecutionService
     private readonly object _lock = new();
     private readonly ILogger<SequenceExecutionService> _log;
     private readonly RemoteEventBus _events;
+    private readonly ApnsPushService _push;
     private readonly HttpClient _loopback;
 
     private WirePlan? _plan;
@@ -35,10 +36,11 @@ public class SequenceExecutionService
     private int _framesCompleted, _framesTotal;
     private DateTime? _startedAt;
 
-    public SequenceExecutionService(ILogger<SequenceExecutionService> log, RemoteEventBus events)
+    public SequenceExecutionService(ILogger<SequenceExecutionService> log, RemoteEventBus events, ApnsPushService push)
     {
         _log = log;
         _events = events;
+        _push = push;
         _loopback = new HttpClient { BaseAddress = new Uri("http://127.0.0.1:1888"), Timeout = TimeSpan.FromMinutes(10) };
     }
 
@@ -133,6 +135,9 @@ public class SequenceExecutionService
             }
             lock (_lock) { _running = false; _currentTarget = null; _currentFilter = null; }
             _log.LogInformation("Sequence '{Plan}' completed: {Frames} frames", plan.Name, _framesCompleted);
+            _ = _push.NotifyAllAsync("촬영 완료",
+                $"'{plan.Name}' 시퀀스가 끝났습니다 ({_framesCompleted}프레임).",
+                "sequence", bypassThrottle: true);
         }
         catch (OperationCanceledException)
         {
@@ -143,6 +148,9 @@ public class SequenceExecutionService
         {
             lock (_lock) { _running = false; _lastError = ex.Message; }
             _log.LogWarning(ex, "Sequence '{Plan}' aborted", plan.Name);
+            _ = _push.NotifyAllAsync("촬영 중단됨",
+                $"'{plan.Name}' 시퀀스가 {_framesCompleted}프레임에서 실패했습니다: {ex.Message}",
+                "sequence", bypassThrottle: true);
         }
         Broadcast();
     }

@@ -29,6 +29,7 @@ public class SafetyResponseService : BackgroundService, ISafetyMonitorConsumer, 
     private readonly EquipmentSelectionService _equipment;
     private readonly IndiDiscoveryService _indi;
     private readonly NinaStateService _state;
+    private readonly Remote.ApnsPushService _push;
     private readonly ILogger<SafetyResponseService> _log;
 
     /// Last observed IsSafe value. We need to detect the *transition*
@@ -43,6 +44,7 @@ public class SafetyResponseService : BackgroundService, ISafetyMonitorConsumer, 
         EquipmentSelectionService equipment,
         IndiDiscoveryService indi,
         NinaStateService state,
+        Remote.ApnsPushService push,
         ILogger<SafetyResponseService> log)
     {
         _safety = safety;
@@ -50,6 +52,7 @@ public class SafetyResponseService : BackgroundService, ISafetyMonitorConsumer, 
         _equipment = equipment;
         _indi = indi;
         _state = state;
+        _push = push;
         _log = log;
     }
 
@@ -111,6 +114,10 @@ public class SafetyResponseService : BackgroundService, ISafetyMonitorConsumer, 
             });
         }
         catch (Exception ex) { _log.LogWarning(ex, "SafetyUnsafe broadcast threw"); }
+
+        _ = _push.NotifyAllAsync("⚠️ 안전 경보",
+            $"{info.Name} 이(가) 위험 상태를 감지했습니다. 진행 중인 노출을 중단합니다.",
+            "safety", bypassThrottle: true);
 
         // 2. Abort the in-flight exposure if any. Not destructive — the
         // half-frame is discarded anyway because the unsafe condition

@@ -82,6 +82,10 @@ builder.Services.AddHttpClient(); // SupabaseAuthService consumes the named "sup
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.SupabaseAuthService>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousConfigStore>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RemoteEventBus>();
+// APNs push: observatory sends directly to Apple (sequence done/failed,
+// chronic driver trouble, safety alerts). Disabled cleanly when apns.json absent.
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.PushTokenStore>();
+builder.Services.AddSingleton<NINA.Headless.Services.Remote.ApnsPushService>();
 builder.Services.AddSingleton<NINA.Headless.Services.Remote.RendezvousClient>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<NINA.Headless.Services.Remote.RendezvousClient>());
 builder.Services.AddSingleton<Phd2Service>();

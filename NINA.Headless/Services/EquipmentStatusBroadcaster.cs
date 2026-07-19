@@ -7,15 +7,17 @@ public class EquipmentStatusBroadcaster : BackgroundService
     private readonly RemoteEventBus _eventBus;
     private readonly NinaStateService _state;
     private readonly SequencerService _sequencer;
+    private readonly ApnsPushService _push;
 
     private readonly IndiDriverWatchdog? _watchdog;
     private readonly IndiToMediatorBridge? _bridge;
 
-    public EquipmentStatusBroadcaster(RemoteEventBus eventBus, NinaStateService state, SequencerService sequencer, IndiDriverWatchdog? watchdog = null, IndiToMediatorBridge? bridge = null)
+    public EquipmentStatusBroadcaster(RemoteEventBus eventBus, NinaStateService state, SequencerService sequencer, ApnsPushService push, IndiDriverWatchdog? watchdog = null, IndiToMediatorBridge? bridge = null)
     {
         _eventBus = eventBus;
         _state = state;
         _sequencer = sequencer;
+        _push = push;
         _watchdog = watchdog;
         _bridge = bridge;
         _state.StateChanged += OnStateChanged;
@@ -68,6 +70,12 @@ public class EquipmentStatusBroadcaster : BackgroundService
             // else needs it; iOS only uses this to phrase the banner.
             windowMinutes = 5,
         });
+
+        // Chronic (not one-off) hardware trouble is the push-worthy signal for
+        // unattended nights; single hangs self-heal via the driver bounce.
+        _ = _push.NotifyAllAsync("장비 이상 감지",
+            $"{device} ({kind}) 이(가) 5분 내 {countInWindow}회 응답하지 않았습니다. 하드웨어 점검이 필요할 수 있습니다.",
+            "watchdog");
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
