@@ -98,6 +98,113 @@ public partial class CameraController
 
     public record RecordStartRequest(string? Mode, int? DurationSeconds, int? FrameCount, string? Filename);
 
+    public record AutoExposeRequest(double? TargetFill, double? Tolerance);
+
+    /// <summary>Converge stream exposure until the frame's robust peak
+    /// brightness (99.99th percentile of the driver's 8-bit stream) sits at
+    /// the target fill. Measures the STREAM domain — exactly what the
+    /// preview shows — not absolute 16-bit ADU. Multiplicative convergence
+    /// with clipping backoff; reports honestly when it can't converge
+    /// (bounds hit, no frames) instead of pretending success.</summary>
+    /// <summary>Current stream brightness stats — the auto-exposure control
+    /// inputs, exposed for UI display and diagnostics.</summary>
+    [HttpGet("stream/brightness")]
+    public IActionResult StreamBrightness()
+    {
+        var b = _stream.Brightness;
+        if (b == null) return Ok(new { available = false });
+        return Ok(new
+        {
+            available = true,
+            peakFill = b.PeakFill,
+            robustPeakFill = b.RobustPeakFill,
+            p999Fill = b.P999Fill,
+            meanFill = b.MeanFill,
+            sampledAt = b.SampledAt,
+            frameNumber = b.FrameNumber,
+        });
+    }
+
+    /// <summary>Verification endpoint: run the EXACT production brightness
+    /// measurement on an uploaded JPEG. Lets synthetic frames (gray cards,
+    /// planet disks, hot-pixel fields) validate the auto-exposure metric
+    /// without a camera.</summary>
+    [HttpPost("stream/brightness/test")]
+    public async Task<IActionResult> BrightnessTest()
+    {
+        using var ms = new MemoryStream();
+        await Request.Body.CopyToAsync(ms, HttpContext.RequestAborted);
+        var stats = CameraStreamService.ComputeBrightness(ms.ToArray(), DateTime.UtcNow, -1);
+        if (stats == null) return BadRequest(new { success = false, message = "not a decodable image" });
+        return Ok(new { peakFill = stats.PeakFill, robustPeakFill = stats.RobustPeakFill,
+                        p999Fill = stats.P999Fill, meanFill = stats.MeanFill });
+    }
+
+    [HttpPost("stream/auto-expose")]
+    public async Task<IActionResult> AutoExpose([FromBody] AutoExposeRequest? request)
+    {
+        if (!_stream.IsRunning)
+            return StatusCode(503, new { success = false, message = "Stream not running — start the live stream first" });
+
+        var ct = HttpContext.RequestAborted;
+        var target = Math.Clamp(request?.TargetFill ?? 0.75, 0.2, 0.95);
+        var tol = Math.Clamp(request?.Tolerance ?? 0.05, 0.01, 0.2);
+        const double minExp = 0.0002, maxExp = 0.5;
+
+        var exposure = _stream.ExposureSeconds;
+        double lastFill = -1;
+        for (var iteration = 1; iteration <= 12; iteration++)
+        {
+            var stats = await WaitFreshBrightnessAsync(exposure, ct);
+            if (stats == null)
+                return StatusCode(503, new { success = false, message = "No fresh frames from the stream (4s timeout)" });
+
+            lastFill = stats.RobustPeakFill;
+            if (Math.Abs(lastFill - target) <= tol)
+                return Ok(new { success = true, converged = true, exposureSeconds = exposure,
+                                achievedFill = lastFill, iterations = iteration });
+
+            double factor;
+            if (stats.PeakFill >= 0.995 && lastFill >= 0.90)
+                factor = 0.5;                                   // clipped — back off hard
+            else
+                factor = target / Math.Max(0.02, lastFill);     // linear sensor assumption
+            factor = Math.Clamp(factor, 0.25, 4.0);
+
+            var next = Math.Clamp(exposure * factor, minExp, maxExp);
+            if (Math.Abs(next - exposure) / exposure < 0.02)
+                return Ok(new { success = false, converged = false, exposureSeconds = exposure,
+                                achievedFill = lastFill, iterations = iteration,
+                                message = next >= maxExp * 0.98
+                                    ? "노출 상한(0.5s)에서도 목표 밝기에 못 미칩니다 — 게인을 올리세요"
+                                    : "노출 하한에서도 목표보다 밝습니다 — 게인을 낮추거나 필터를 쓰세요" });
+            exposure = next;
+            await _stream.ConfigureAndApplyAsync(exposure, 0, null, null, null, null, null, null, null, ct);
+        }
+        return Ok(new { success = false, converged = false, exposureSeconds = exposure,
+                        achievedFill = lastFill, iterations = 12,
+                        message = "12회 반복에도 수렴하지 않았습니다 (변광/시상 요동 가능)" });
+    }
+
+    /// <summary>Wait for a brightness sample taken AFTER the current exposure
+    /// had time to reach the sensor (debounce + ~2 frame periods), so the
+    /// loop never reasons about stale frames. Null on 4 s timeout.</summary>
+    private async Task<CameraStreamService.BrightnessStats?> WaitFreshBrightnessAsync(double exposureSeconds, CancellationToken ct)
+    {
+        // 300 ms apply debounce + two frame periods at the new exposure.
+        var settle = TimeSpan.FromMilliseconds(300 + Math.Max(100, exposureSeconds * 2000));
+        var freshAfter = DateTime.UtcNow + settle;
+        var deadline = DateTime.UtcNow + settle + TimeSpan.FromSeconds(4);
+        while (DateTime.UtcNow < deadline)
+        {
+            ct.ThrowIfCancellationRequested();
+            var stats = _stream.Brightness;
+            if (stats != null && stats.SampledAt >= freshAfter) return stats;
+            await Task.Delay(150, ct);
+        }
+        return null;
+    }
+
     [HttpPost("record/start")]
     public async Task<IActionResult> RecordStart([FromBody] RecordStartRequest? request)
     {

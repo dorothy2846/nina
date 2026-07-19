@@ -56,10 +56,78 @@ public partial class CameraStreamService
         _ = Task.Run(() => ProcessFrame(bytes, frameNum, blobReceived));
     }
 
+    // MARK: Brightness stats (auto-exposure input)
+    //
+    // Sampled ~2×/s from the driver's 8-bit stream frames. This measures the
+    // STREAM domain (the driver's linear 16→8 conversion), which is exactly
+    // what the preview shows — good for "fill to 75%" targeting and clipping
+    // detection, NOT an absolute 16-bit ADU meter.
+    /// RobustPeakFill = 99.99th percentile — the brightness of the object's
+    /// bright core while ignoring isolated hot pixels. This is the
+    /// auto-exposure control variable: on a planet it sits on the disk; on
+    /// anything it tracks "the brightest real thing in frame".
+    public sealed record BrightnessStats(double PeakFill, double RobustPeakFill, double P999Fill, double MeanFill, DateTime SampledAt, long FrameNumber);
+    private volatile BrightnessStats? _brightness;
+    public BrightnessStats? Brightness => _brightness;
+    private DateTime _lastBrightnessSample = DateTime.MinValue;
+
+    private void SampleBrightness(byte[] jpegBytes, long frameNumber)
+    {
+        var now = DateTime.UtcNow;
+        if ((now - _lastBrightnessSample).TotalMilliseconds < 500) return;
+        _lastBrightnessSample = now;
+        try
+        {
+            var stats = ComputeBrightness(jpegBytes, now, frameNumber);
+            if (stats != null) _brightness = stats;
+        }
+        catch { /* stats are best-effort; never break the frame path */ }
+    }
+
+    /// <summary>The measurement core — shared verbatim by the live sampler
+    /// and the /stream/brightness/test verification endpoint so what we test
+    /// IS what runs in production.</summary>
+    public static BrightnessStats? ComputeBrightness(byte[] jpegBytes, DateTime now, long frameNumber)
+    {
+        using var img = SixLabors.ImageSharp.Image.Load<SixLabors.ImageSharp.PixelFormats.L8>(jpegBytes);
+        // 256-bin histogram over a 1-in-4 row subsample — cheap and stable.
+        var bins = new int[256];
+        long count = 0, sum = 0;
+        for (int y = 0; y < img.Height; y += 4)
+        {
+            var row = img.DangerousGetPixelRowMemory(y).Span;
+            for (int x = 0; x < row.Length; x++)
+            {
+                var v = row[x].PackedValue;
+                bins[v]++;
+                sum += v;
+                count++;
+            }
+        }
+        if (count == 0) return null;
+        int peak = 255;
+        while (peak > 0 && bins[peak] == 0) peak--;
+        int Percentile(double q)
+        {
+            long acc = 0;
+            long threshold = (long)(count * q);
+            for (int v = 0; v < 256; v++)
+            {
+                acc += bins[v];
+                if (acc >= threshold) return v;
+            }
+            return 255;
+        }
+        var p999 = Percentile(0.999);
+        var robustPeak = Percentile(0.9999);
+        return new BrightnessStats(peak / 255.0, robustPeak / 255.0, p999 / 255.0, (double)sum / count / 255.0, now, frameNumber);
+    }
+
     private void ProcessFrame(byte[] bytes, long frameNumber, DateTime blobReceived)
     {
         try
         {
+            SampleBrightness(bytes, frameNumber);
             // Decode + debayer ONCE. Hand the decoded RGB image to two
             // serializers below — one for the JPEG WebSocket fallback path
             // (rare in current iOS, kept for compatibility) and one for the
