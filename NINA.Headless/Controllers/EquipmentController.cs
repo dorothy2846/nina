@@ -152,6 +152,10 @@ public class EquipmentController : ControllerBase
             vendorLabel = d.VendorLabel,
             suggestedDrivers = d.SuggestedDrivers,
             driversRunning = d.SuggestedDrivers.All(s => running.Contains(s)) && d.SuggestedDrivers.Count > 0,
+            // Suggested drivers whose binary is absent on this server — the
+            // app shows these instead of a silent no-op when hardware from a
+            // vendor without its driver package is plugged in.
+            missingDrivers = d.SuggestedDrivers.Where(s => !IndiServerManager.DriverBinaryExists(s)).ToArray(),
             isSerialAdapter = d.IsSerialAdapter,
         });
         return Ok(new { devices });

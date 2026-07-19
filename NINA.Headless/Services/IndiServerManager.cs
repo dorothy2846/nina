@@ -93,6 +93,13 @@ public class IndiServerManager : BackgroundService
         {
             _baseDrivers.Clear();
             _baseDrivers.AddRange(baseList.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+            // indiserver logs-and-continues on a missing driver binary, so a
+            // typo'd or uninstalled driver in NINA_INDI_DRIVERS was invisible
+            // (the startup line even listed it as if running). Surface it.
+            foreach (var missing in _baseDrivers.Where(d => !DriverBinaryExists(d)))
+            {
+                _log.LogWarning("indiserver: configured driver '{Driver}' is not installed — it will not start", missing);
+            }
             drivers = string.Join(' ', _baseDrivers.Concat(_dynamicDrivers).Distinct());
         }
 
@@ -232,9 +239,28 @@ public class IndiServerManager : BackgroundService
     /// the others (USB auto-detect / manual add from the app). Returns false if
     /// the driver is already in the running set. The driver is remembered so an
     /// indiserver restart relaunches it too.</summary>
+    /// <summary>True when the driver executable exists on PATH (or the
+    /// standard Homebrew/libindi locations). indiserver silently ignores a
+    /// FIFO start for a missing binary, so callers must check up front or the
+    /// failure is invisible to the user.</summary>
+    public static bool DriverBinaryExists(string driverName)
+    {
+        var dirs = (Environment.GetEnvironmentVariable("PATH") ?? "")
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries)
+            .Concat(new[] { "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin" });
+        return dirs.Distinct().Any(dir => File.Exists(Path.Combine(dir, driverName)));
+    }
+
     public async Task<bool> StartDriverAsync(string driverName, CancellationToken ct)
     {
         ValidateDriverName(driverName);
+        if (!DriverBinaryExists(driverName))
+        {
+            _log.LogWarning("indiserver: driver binary '{Driver}' is not installed — start refused", driverName);
+            throw new InvalidOperationException(
+                $"INDI driver '{driverName}' is not installed on this server. " +
+                "Install the vendor driver package (bundled in the full deployment image) and retry.");
+        }
         lock (_driversLock)
         {
             if (_baseDrivers.Contains(driverName) || _dynamicDrivers.Contains(driverName))
