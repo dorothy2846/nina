@@ -15,11 +15,13 @@ public class UpdateController : ControllerBase
 {
     private readonly SystemUpdateService _updates;
     private readonly PairedDeviceStore _paired;
+    private readonly AutoUpdateService _auto;
 
-    public UpdateController(SystemUpdateService updates, PairedDeviceStore paired)
+    public UpdateController(SystemUpdateService updates, PairedDeviceStore paired, AutoUpdateService auto)
     {
         _updates = updates;
         _paired = paired;
+        _auto = auto;
     }
 
     /// <summary>Bearer token gate — apt-get can reboot the box, so only paired devices
@@ -29,6 +31,25 @@ public class UpdateController : ControllerBase
         var auth = Request.Headers.Authorization.ToString();
         var token = auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? auth[7..].Trim() : "";
         return _paired.Verify(token) != null;
+    }
+
+    /// <summary>Unattended-update policy: enabled by default, applies only
+    /// while the observatory is idle. See AutoUpdateService.</summary>
+    [HttpGet("auto")]
+    public IActionResult GetAuto()
+    {
+        if (!IsAuthorized()) return Unauthorized();
+        return Ok(_auto.Current);
+    }
+
+    public record AutoRequest(bool Enabled);
+
+    [HttpPost("auto")]
+    public IActionResult SetAuto([FromBody] AutoRequest? request)
+    {
+        if (!IsAuthorized()) return Unauthorized();
+        if (request == null) return BadRequest(new { message = "enabled is required" });
+        return Ok(_auto.SetEnabled(request.Enabled));
     }
 
     [HttpGet("check")]

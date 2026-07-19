@@ -31,6 +31,7 @@ public class SystemUpdateService
         "indi-asi", "indi-playerone", "indi-qhy", "indi-pegasus",
         "indi-atik", "indi-sx", "indi-altair", "indi-toupbase",
         "indi-celestronaux", "indi-eqmod",
+        "indi-gphoto", "indi-svbony",
         "indi-3rdparty-libraries",
         "gphoto2", "phd2"
     };
