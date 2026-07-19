@@ -123,10 +123,25 @@ public partial class CameraStreamService
         return new BrightnessStats(peak / 255.0, robustPeak / 255.0, p999 / 255.0, (double)sum / count / 255.0, now, frameNumber);
     }
 
+    /// Latest raw driver frame (JPEG) + its arrival time — consumed by the
+    /// planet-centering service for on-demand centroid measurement.
+    private volatile byte[]? _latestFrameJpeg;
+    private DateTime _latestFrameAt = DateTime.MinValue;
+    public (byte[] Jpeg, DateTime At)? LatestFrame
+    {
+        get
+        {
+            var f = _latestFrameJpeg;
+            return f == null ? null : (f, _latestFrameAt);
+        }
+    }
+
     private void ProcessFrame(byte[] bytes, long frameNumber, DateTime blobReceived)
     {
         try
         {
+            _latestFrameJpeg = bytes;
+            _latestFrameAt = blobReceived;
             SampleBrightness(bytes, frameNumber);
             // Decode + debayer ONCE. Hand the decoded RGB image to two
             // serializers below — one for the JPEG WebSocket fallback path

@@ -51,6 +51,7 @@ builder.Services.AddSingleton<EquipmentSelectionService>();
 builder.Services.AddSingleton<CameraSelectionService>();
 builder.Services.AddSingleton<AlpacaClient>();
 builder.Services.AddSingleton<AutoCalibrationOrchestrator>();
+builder.Services.AddSingleton<PlanetCenteringService>();
 var recentLog = new RingBufferLog();
 builder.Logging.AddProvider(recentLog);
 builder.Services.AddSingleton(recentLog);
