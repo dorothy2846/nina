@@ -106,12 +106,12 @@ public partial class CameraController
             return StatusCode(503, new { success = false, message = "No INDI camera connected" });
 
         // Server-side safety cap: clients can request "manual" but we always
-        // route through the duration path with a 60 s ceiling. This keeps a
+        // route through the duration path with a ceiling. This keeps a
         // forgotten Stop button from filling the disk with a 300 GB SER —
-        // an actual incident on this build (twice). Callers who genuinely
-        // want a longer take can pass duration explicitly up to the cap;
-        // beyond that the client should compose multiple clips.
-        const int kMaxDurationSeconds = 60;
+        // an actual incident on this build (twice). 300 s covers the longest
+        // rotation-safe planetary clip (Saturn/Moon presets); beyond that
+        // the client should compose multiple clips.
+        const int kMaxDurationSeconds = 300;
         var requestedMode = (request?.Mode ?? "manual").ToLowerInvariant();
         var requestedDuration = request?.DurationSeconds ?? 0;
         IndiDiscoveryService.RecordMode mode;
